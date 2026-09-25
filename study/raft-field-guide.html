@@ -602,7 +602,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="284" y="42" class="b">#research</text>
       <rect x="284" y="54" width="262" height="48" rx="6" class="k-human"/>
       <text x="296" y="74" class="sm"><tspan class="mono">seq 812</tspan> Alice: @scout can you check…</text>
-      <text x="296" y="92" class="xs">messages.threadId → the thread (set on the parent)</text>
+      <text x="296" y="92" class="xs">messages.threadId → thread (on the parent)</text>
       <path d="M546,78 L636,78" class="ln" marker-end="url(#ah)"/>
       <text x="591" y="70" class="xs mid">first reply</text>
       <rect x="638" y="20" width="342" height="96" rx="8" class="box"/>
@@ -784,7 +784,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <rect x="590" y="340" width="170" height="50" rx="8" class="k-bad"/>
       <text x="675" y="362" class="b mid">Drop</text><text x="675" y="379" class="xs mid mono">reset_in_progress</text>
 
-      <rect x="20" y="300" width="400" height="80" rx="8" class="grp"/>
+      <rect x="20" y="300" width="400" height="92" rx="8" class="grp"/>
       <text x="34" y="324" class="b">Not an input: is the machine online?</text>
       <text x="34" y="344" class="sm">Reachability is hard-coded to "unknown". A message for an</text>
       <text x="34" y="361" class="sm">active agent on an offline machine takes "deliver directly",</text>
@@ -924,8 +924,8 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="729" y="146" class="xs mid">written to the</text><text x="729" y="160" class="xs mid">model's stdin</text>
       <text x="889" y="146" class="xs mid">server; CHECK</text><text x="889" y="160" class="xs mid">requires drained_at</text>
 
-      <path d="M89,196 L799,196" class="ln ln-bad dashed"/>
-      <path d="M89,126 L89,196 M249,178 L249,196 M409,166 L409,196 M569,166 L569,196 M729,166 L729,196" class="ln ln-bad dashed"/>
+      <path d="M89,196 L729,196" class="ln ln-bad dashed"/>
+      <path d="M89,180 L89,196 M249,178 L249,196 M409,166 L409,196 M569,166 L569,196 M729,166 L729,196" class="ln ln-bad dashed"/>
       <path d="M444,196 L444,224" class="ln ln-bad" marker-end="url(#ah-bad)"/>
       <rect x="310" y="226" width="268" height="48" rx="8" class="k-bad"/>
       <text x="444" y="246" class="b mid mono">terminal_error</text>
@@ -1035,7 +1035,8 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <g class="badge"><circle cx="560" cy="290" r="10"/><text x="560" y="294">6</text></g>
 
       <path d="M572,328 L886,328" class="ln ln-agent" marker-end="url(#ah-agent)"/>
-      <text x="576" y="320" class="sm halo">spawn claude, stream-json, raft wrapper on PATH, no keys in env</text>
+      <text x="576" y="320" class="sm halo">spawn claude, stream-json, raft wrapper on PATH</text>
+      <text x="576" y="344" class="xs t-muted">no keys in env</text>
       <g class="badge"><circle cx="560" cy="328" r="10"/><text x="560" y="332">7</text></g>
 
       <path d="M878,366 L564,366" class="ln ln-agent" marker-end="url(#ah-agent)"/>
@@ -1073,7 +1074,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="234" y="52" class="b">Daemon's local inbox</text>
       <rect x="234" y="64" width="212" height="36" rx="6" class="box"/><text x="244" y="87" class="sm"><tspan class="mono">812</tspan> Alice: @scout can you check…</text>
       <text x="234" y="124" class="xs">bodies stay here until the model asks</text>
-      <text x="234" y="140" class="xs">duplicate notices suppressed by fingerprint</text>
+      <text x="234" y="140" class="xs">duplicates suppressed by fingerprint</text>
       <path d="M460,93 L518,93" class="ln ln-agent" marker-end="url(#ah-agent)"/><text x="489" y="85" class="xs mid">notice</text>
       <rect x="520" y="64" width="270" height="58" rx="8" class="k-agent"/>
       <text x="534" y="88" class="mono">[Raft inbox notice: 1 unread</text>
@@ -1099,19 +1100,19 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
     <div class="fig-title">Figure 15 · The credential proxy</div>
     <div class="scroll">
     <svg class="w720" viewBox="0 0 1000 250" role="img" aria-label="The model's shell runs the raft CLI, which calls the local proxy with a sap launch token. The proxy checks the token, pins the origin, replaces the Authorization header with the real sk_agent key and forwards to the server, which looks up the key in agent_credentials and derives the agent id from it.">
-      <rect x="10" y="28" width="368" height="128" rx="10" class="grp"/>
+      <rect x="10" y="28" width="362" height="128" rx="10" class="grp"/>
       <text x="22" y="174" class="xs">the model can read everything inside the dashed box</text>
       <rect x="24" y="56" width="150" height="72" rx="8" class="k-agent"/><text x="99" y="84" class="b mid">Model's shell</text><text x="99" y="104" class="xs mid">sap_ token file (0600)</text>
       <path d="M174,92 L208,92" class="ln ln-agent" marker-end="url(#ah-agent)"/>
       <rect x="210" y="56" width="150" height="72" rx="8" class="k-cli"/><text x="285" y="84" class="b mid">raft CLI</text><text x="285" y="104" class="xs mid">wrapper on PATH</text>
-      <path d="M360,92 L408,92" class="ln ln-cli" marker-end="url(#ah-cli)"/><text x="384" y="84" class="xs mid">sap_…</text>
+      <path d="M360,92 L408,92" class="ln ln-cli" marker-end="url(#ah-cli)"/><text x="392" y="84" class="xs mid">sap_…</text>
       <rect x="410" y="40" width="230" height="104" rx="8" class="k-daemon"/>
       <text x="424" y="62" class="b">Proxy on 127.0.0.1</text>
       <text x="424" y="82" class="xs">checks the launch token</text>
       <text x="424" y="98" class="xs">refuses any other target origin (403)</text>
       <text x="424" y="114" class="xs">replaces Authorization with sk_agent_…</text>
       <text x="424" y="130" class="xs">sets X-Agent-Id and capabilities</text>
-      <path d="M640,92 L688,92" class="ln ln-server" marker-end="url(#ah-server)"/><text x="664" y="84" class="xs mid">sk_agent_</text>
+      <path d="M640,92 L688,92" class="ln ln-server" marker-end="url(#ah-server)"/><text x="664" y="84" class="xs mid">sk_…</text>
       <rect x="690" y="56" width="150" height="72" rx="8" class="k-server"/><text x="765" y="84" class="b mid">Server</text><text x="765" y="104" class="xs mid">/internal/agent-api</text>
       <path d="M840,92 L868,92" class="ln ln-pg" marker-end="url(#ah-pg)"/>
       <rect x="870" y="56" width="120" height="72" rx="8" class="k-pg"/><text x="930" y="84" class="b mid mono" style="font-size:10.5px">agent_credentials</text><text x="930" y="104" class="xs mid">argon2id hash</text>
@@ -1307,7 +1308,7 @@ RETURNING *;</pre>
       <path d="M868,210 L504,210" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
       <text x="862" y="202" class="sm end halo">local timer set · reminder.armed v1</text>
       <g class="badge"><circle cx="880" cy="210" r="10"/><text x="880" y="214">4</text></g>
-      <text x="516" y="252" class="sm halo t-muted">watchdog, every 30 s: due within 15 s but not armed → push again</text>
+      <text x="516" y="252" class="sm halo t-muted">watchdog (30 s): due in 15 s, not armed → push again</text>
       <g class="badge"><circle cx="500" cy="248" r="10"/><text x="500" y="252">5</text></g>
       <path d="M868,286 L504,286" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
       <text x="862" y="278" class="sm end halo">timer due · fire_request v1</text>
@@ -1426,9 +1427,9 @@ RETURNING *;</pre>
       <path d="M526,80 L542,80" class="ln" marker-end="url(#ah)"/>
       <rect x="544" y="34" width="180" height="92" rx="8" class="k-pg"/><text x="634" y="58" class="b mid">Stored</text><text x="634" y="78" class="xs mid">memory snapshot</text><text x="634" y="92" class="xs mid">Redis mirror, 10 min</text><text x="634" y="106" class="xs mid">agent_activity_events</text><text x="634" y="120" class="xs mid">(facts only, deduped)</text>
       <path d="M724,80 L740,80" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
-      <rect x="742" y="34" width="118" height="92" rx="8" class="k-redis"/><text x="801" y="62" class="b mid">Socket.IO</text><text x="801" y="82" class="xs mid">agent:activity</text><text x="801" y="96" class="xs mid">no trajectory</text><text x="801" y="110" class="xs mid">in the push</text>
-      <path d="M860,80 L876,80" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
-      <rect x="878" y="34" width="102" height="92" rx="8" class="k-human"/><text x="929" y="62" class="b mid">Browser</text><text x="929" y="82" class="xs mid">keeps highest</text><text x="929" y="96" class="xs mid">serverSeq; pulls</text><text x="929" y="110" class="xs mid">trajectory by REST</text>
+      <rect x="742" y="34" width="106" height="92" rx="8" class="k-redis"/><text x="795" y="62" class="b mid">Socket.IO</text><text x="795" y="82" class="xs mid">agent:activity</text><text x="795" y="96" class="xs mid">no trajectory</text><text x="795" y="110" class="xs mid">in the push</text>
+      <path d="M848,80 L864,80" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
+      <rect x="866" y="34" width="114" height="92" rx="8" class="k-human"/><text x="923" y="62" class="b mid">Browser</text><text x="923" y="82" class="xs mid">keeps highest</text><text x="923" y="96" class="xs mid">serverSeq; pulls</text><text x="923" y="110" class="xs mid">trajectory by REST</text>
 
       <text x="500" y="160" class="sm mid">shared join keys: launchId, clientSeq, producerFactId</text>
       <path d="M160,168 L840,168" class="ln ln-muted dashed"/>
@@ -1470,8 +1471,8 @@ RETURNING *;</pre>
     <div class="fig-title">Figure 22 · Three minutes offline</div>
     <div class="scroll">
     <svg class="w720" viewBox="0 0 1000 300" role="img" aria-label="Timeline: Wi-Fi drops and agents keep running locally. The server notices a closed socket or 60 seconds of silence. After a 2 second grace the lease is deleted and agents show machine disconnected. After 60 more seconds the owner is notified. Bob's mention is saved and its delivery parks. At three minutes the daemon reconnects to any replica, sends ready with its running agents, the server reconciles and re-sends mention rows.">
-      <rect x="230" y="138" width="490" height="24" class="band"/>
-      <text x="600" y="155" class="xs mid t-bad">machine shown offline</text>
+      <rect x="230" y="130" width="490" height="32" class="band"/>
+      <text x="600" y="145" class="xs mid t-bad">machine shown offline</text>
       <path d="M40,150 L960,150" class="ln ln-muted" marker-end="url(#ah-muted)"/>
       <text x="960" y="176" class="xs end">time</text>
 
