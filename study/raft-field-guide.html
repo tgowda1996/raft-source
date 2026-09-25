@@ -1,0 +1,1840 @@
+<title>Raft Field Guide</title>
+<meta name="description" content="How Raft works inside: components, flows and patterns, followed through one message, with lessons for a Temporal + AgentCore + Postgres research system.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F2F4F6; --surface:#FFFFFF; --surface-2:#E8ECF0; --ink:#14212D; --ink-2:#3C4B59; --muted:#647382; --rule:#CFD7DF;
+  --human:#C2410C; --server:#2154C4; --pg:#0B7A68; --redis:#BE2A31; --daemon:#7338CF; --agent:#945604; --cli:#4A5968;
+  --good:#177245; --bad:#B42318; --warn:#9A5B00;
+  --accent:#2154C4;
+  --tint:12%;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --cond:"IBM Plex Sans Condensed","IBM Plex Sans","Arial Narrow",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E151C; --surface:#151F29; --surface-2:#1C2834; --ink:#E4EAF0; --ink-2:#B4C0CC; --muted:#8796A5; --rule:#2B3947;
+    --human:#F28C4E; --server:#76A0FF; --pg:#3CC3AC; --redis:#F2676C; --daemon:#B48DFF; --agent:#E2A845; --cli:#9DACBA;
+    --good:#4CC486; --bad:#F2706A; --warn:#E7AE4A; --accent:#76A0FF; --tint:20%;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E151C; --surface:#151F29; --surface-2:#1C2834; --ink:#E4EAF0; --ink-2:#B4C0CC; --muted:#8796A5; --rule:#2B3947;
+  --human:#F28C4E; --server:#76A0FF; --pg:#3CC3AC; --redis:#F2676C; --daemon:#B48DFF; --agent:#E2A845; --cli:#9DACBA;
+  --good:#4CC486; --bad:#F2706A; --warn:#E7AE4A; --accent:#76A0FF; --tint:20%;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.62;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+code,.mono{font-family:var(--mono);font-size:.88em}
+p code,li code,td code{background:var(--surface-2);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+h1,h2,h3{font-family:var(--cond);text-wrap:balance;line-height:1.15;margin:0}
+h1{font-size:clamp(34px,5.4vw,56px);font-weight:700;letter-spacing:-.01em}
+h2{font-size:clamp(26px,3.4vw,34px);font-weight:600;margin-top:6px}
+h3{font-size:20px;font-weight:600;margin-top:34px;margin-bottom:6px}
+p,ul,ol{margin:0 0 14px}
+ul,ol{padding-left:22px}
+li{margin-bottom:6px}
+strong{font-weight:600}
+
+.page{max-width:1240px;margin:0 auto;padding-inline:16px;display:grid;grid-template-columns:200px minmax(0,1fr);gap:44px}
+nav.toc{position:sticky;top:env(safe-area-inset-top,0px);align-self:start;max-height:100vh;overflow:auto;padding-block:36px 24px;font-size:13.5px}
+nav.toc .toc-title{font-family:var(--cond);font-weight:600;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+nav.toc ol{list-style:none;padding:0;margin:0;display:grid;gap:2px}
+nav.toc a{display:grid;grid-template-columns:22px 1fr;gap:4px;padding:5px 8px;border-radius:6px;color:var(--ink-2);text-decoration:none;line-height:1.3}
+nav.toc a .n{font-family:var(--mono);font-size:11.5px;color:var(--muted);padding-top:1px}
+nav.toc a:hover{background:var(--surface-2);color:var(--ink)}
+nav.toc a.active{background:var(--surface);color:var(--ink);box-shadow:inset 0 0 0 1px var(--rule)}
+main{padding-block:36px 110px;min-width:0}
+.prose{max-width:70ch}
+section.chapter{padding-top:64px;scroll-margin-top:12px}
+.chap-label{font-family:var(--cond);font-weight:600;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+.lede{font-size:18.5px;color:var(--ink-2);max-width:66ch}
+.here{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2);background:var(--surface);border:1px solid var(--rule);border-radius:999px;padding:3px 12px 3px 4px;margin:12px 0 4px}
+.here b{font-family:var(--mono);font-weight:500;font-size:12px;background:var(--ink);color:var(--surface);border-radius:999px;padding:1px 8px}
+
+/* hero */
+.hero{padding-top:8px}
+.hero .kicker{font-family:var(--mono);font-size:13px;color:var(--muted);margin-bottom:14px}
+.thesis{margin-top:26px;background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:22px 24px;max-width:78ch}
+.thesis p{font-size:19px;line-height:1.5;margin:0}
+.thesis p + p{margin-top:12px;font-size:16px;color:var(--ink-2)}
+.ideas{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:22px}
+.idea{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.idea h4{font-family:var(--cond);font-size:16.5px;font-weight:600;margin:0 0 4px}
+.idea p{font-size:14.5px;color:var(--ink-2);margin:0}
+
+/* figures */
+figure{margin:26px 0 30px;background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:16px 16px 14px}
+figure .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+figure svg{display:block;width:100%;height:auto}
+figure svg.w720{min-width:720px}
+figure svg.w640{min-width:640px}
+figcaption{font-size:14px;color:var(--ink-2);margin-top:10px;max-width:84ch;line-height:1.55}
+figcaption b{color:var(--ink);font-weight:600}
+.fig-title{font-family:var(--cond);font-weight:600;font-size:15px;margin:0 0 8px;color:var(--ink)}
+
+/* svg vocabulary */
+svg text{font-family:var(--sans);font-size:12.5px;fill:var(--ink)}
+svg .b{font-weight:600}
+svg .sm{font-size:11.5px;fill:var(--ink-2)}
+svg .xs{font-size:10.5px;fill:var(--muted)}
+svg .mono{font-family:var(--mono);font-size:11.5px}
+svg .mid{text-anchor:middle}
+svg .end{text-anchor:end}
+svg .halo{paint-order:stroke;stroke:var(--surface);stroke-width:5px;stroke-linejoin:round}
+svg .box{fill:var(--surface);stroke:var(--rule);stroke-width:1.2}
+svg .soft{fill:var(--surface-2);stroke:none}
+svg .grp{fill:none;stroke:var(--rule);stroke-width:1.2;stroke-dasharray:5 4}
+svg .k-human{fill:color-mix(in srgb,var(--human) var(--tint),var(--surface));stroke:var(--human);stroke-width:1.3}
+svg .k-server{fill:color-mix(in srgb,var(--server) var(--tint),var(--surface));stroke:var(--server);stroke-width:1.3}
+svg .k-pg{fill:color-mix(in srgb,var(--pg) var(--tint),var(--surface));stroke:var(--pg);stroke-width:1.3}
+svg .k-redis{fill:color-mix(in srgb,var(--redis) var(--tint),var(--surface));stroke:var(--redis);stroke-width:1.3}
+svg .k-daemon{fill:color-mix(in srgb,var(--daemon) var(--tint),var(--surface));stroke:var(--daemon);stroke-width:1.3}
+svg .k-agent{fill:color-mix(in srgb,var(--agent) var(--tint),var(--surface));stroke:var(--agent);stroke-width:1.3}
+svg .k-cli{fill:color-mix(in srgb,var(--cli) var(--tint),var(--surface));stroke:var(--cli);stroke-width:1.3}
+svg .k-good{fill:color-mix(in srgb,var(--good) var(--tint),var(--surface));stroke:var(--good);stroke-width:1.3}
+svg .k-bad{fill:color-mix(in srgb,var(--bad) var(--tint),var(--surface));stroke:var(--bad);stroke-width:1.3}
+svg .k-warn{fill:color-mix(in srgb,var(--warn) var(--tint),var(--surface));stroke:var(--warn);stroke-width:1.3}
+svg .dashed{stroke-dasharray:5 4}
+svg .ln{fill:none;stroke:var(--ink-2);stroke-width:1.5}
+svg .ln-human{stroke:var(--human)} svg .ln-server{stroke:var(--server)} svg .ln-pg{stroke:var(--pg)} svg .ln-redis{stroke:var(--redis)}
+svg .ln-daemon{stroke:var(--daemon)} svg .ln-agent{stroke:var(--agent)} svg .ln-cli{stroke:var(--cli)} svg .ln-good{stroke:var(--good)} svg .ln-bad{stroke:var(--bad)} svg .ln-muted{stroke:var(--muted)}
+svg .life{stroke:var(--rule);stroke-width:1.2;stroke-dasharray:3 5}
+svg .badge circle{fill:var(--ink)} svg .badge text{fill:var(--surface);font-family:var(--mono);font-size:10.5px;font-weight:600;text-anchor:middle}
+svg .dot{fill:var(--ink-2)}
+svg .t-human{fill:var(--human)} svg .t-server{fill:var(--server)} svg .t-pg{fill:var(--pg)} svg .t-redis{fill:var(--redis)} svg .t-daemon{fill:var(--daemon)} svg .t-agent{fill:var(--agent)} svg .t-good{fill:var(--good)} svg .t-bad{fill:var(--bad)} svg .t-warn{fill:var(--warn)} svg .t-muted{fill:var(--muted)}
+svg .f-human{fill:var(--human)} svg .f-server{fill:var(--server)} svg .f-pg{fill:var(--pg)} svg .f-redis{fill:var(--redis)} svg .f-daemon{fill:var(--daemon)} svg .f-agent{fill:var(--agent)} svg .f-bad{fill:var(--bad)} svg .f-good{fill:var(--good)} svg .f-ink{fill:var(--ink-2)} svg .f-muted{fill:var(--muted)} svg .f-cli{fill:var(--cli)}
+svg .band{fill:color-mix(in srgb,var(--bad) 8%,transparent);stroke:none}
+
+/* legend */
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:13px;color:var(--ink-2);margin:6px 0 0}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:12px;height:12px;border-radius:3px;display:inline-block;border:1.5px solid}
+.sw-human{border-color:var(--human)!important;background:color-mix(in srgb,var(--human) var(--tint),var(--surface))}
+.sw-server{border-color:var(--server)!important;background:color-mix(in srgb,var(--server) var(--tint),var(--surface))}
+.sw-pg{border-color:var(--pg)!important;background:color-mix(in srgb,var(--pg) var(--tint),var(--surface))}
+.sw-redis{border-color:var(--redis)!important;background:color-mix(in srgb,var(--redis) var(--tint),var(--surface))}
+.sw-daemon{border-color:var(--daemon)!important;background:color-mix(in srgb,var(--daemon) var(--tint),var(--surface))}
+.sw-agent{border-color:var(--agent)!important;background:color-mix(in srgb,var(--agent) var(--tint),var(--surface))}
+.sw-cli{border-color:var(--cli)!important;background:color-mix(in srgb,var(--cli) var(--tint),var(--surface))}
+
+/* cast cards */
+.cast{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin:18px 0}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.card .tag{display:inline-block;font-family:var(--cond);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;padding:1px 8px;border-radius:4px;border:1.5px solid;margin-bottom:8px}
+.card h4{font-family:var(--cond);font-size:17px;font-weight:600;margin:0 0 4px}
+.card p{font-size:14.5px;color:var(--ink-2);margin:0 0 8px}
+.card .path{font-family:var(--mono);font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+
+/* your stack boxes */
+.yours{background:var(--surface-2);border-radius:10px;padding:14px 18px;margin:18px 0;max-width:78ch}
+.yours .yl{font-family:var(--cond);font-weight:600;font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--daemon);margin-bottom:4px}
+.yours p{margin:0 0 8px;font-size:15px}
+.yours p:last-child{margin-bottom:0}
+.edge{border:1px solid var(--rule);background:var(--surface);border-radius:10px;padding:12px 16px;margin:16px 0;max-width:78ch;font-size:15px}
+.edge .el{font-family:var(--cond);font-weight:600;font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--warn);margin-bottom:2px}
+.edge p{margin:0}
+
+/* code */
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.55;margin:16px 0;max-width:86ch}
+pre .c{color:var(--muted)}
+
+/* tables */
+.tablewrap{overflow-x:auto;margin:18px 0;border:1px solid var(--rule);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:9px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--rule)}
+th{font-family:var(--cond);font-weight:600;font-size:13.5px;letter-spacing:.02em;color:var(--ink-2);background:var(--surface-2)}
+tr:last-child td{border-bottom:none}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:1px 9px;border-radius:999px;white-space:nowrap;border:1px solid}
+.p-good{color:var(--good);border-color:var(--good);background:color-mix(in srgb,var(--good) 10%,var(--surface))}
+.p-bad{color:var(--bad);border-color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,var(--surface))}
+.p-warn{color:var(--warn);border-color:var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--surface))}
+.p-temporal{color:var(--daemon);border-color:var(--daemon);background:color-mix(in srgb,var(--daemon) 10%,var(--surface))}
+.p-ac{color:var(--agent);border-color:var(--agent);background:color-mix(in srgb,var(--agent) 10%,var(--surface))}
+.p-pg{color:var(--pg);border-color:var(--pg);background:color-mix(in srgb,var(--pg) 10%,var(--surface))}
+
+/* matrix */
+.matrix td,.matrix th{text-align:center;font-variant-numeric:tabular-nums}
+.matrix td:first-child,.matrix th:first-child{text-align:left}
+.yes{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--pg)}
+.no{display:inline-block;width:12px;height:2px;background:var(--rule);vertical-align:middle}
+
+/* pattern cards */
+.patterns{display:grid;gap:12px;margin:18px 0}
+.pattern{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:16px 18px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 22px}
+.pattern h4{grid-column:1/-1;font-family:var(--cond);font-size:18px;font-weight:600;margin:0 0 4px}
+.pattern h4 .pn{font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:500;margin-right:8px}
+.pattern .col-l{font-family:var(--cond);font-weight:600;font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px}
+.pattern .raft .col-l{color:var(--server)} .pattern .you .col-l{color:var(--daemon)} .pattern .trap .col-l{color:var(--warn)}
+.pattern p{font-size:14.5px;margin:0;color:var(--ink-2)}
+@media (max-width:760px){.pattern{grid-template-columns:minmax(0,1fr)}}
+
+.mobile-toc{display:none;background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:12px 16px;margin-top:22px;font-size:14.5px}
+.mobile-toc ol{margin:6px 0 0;padding-left:22px;columns:2;column-gap:24px}
+@media (max-width:980px){
+  .page{grid-template-columns:minmax(0,1fr);gap:0}
+  nav.toc{display:none}
+  .mobile-toc{display:block}
+}
+@media (max-width:560px){.mobile-toc ol{columns:1}}
+footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-size:13.5px;color:var(--muted);max-width:78ch}
+</style>
+
+<!-- shared arrowheads -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-ink"/></marker>
+    <marker id="ah-human" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-human"/></marker>
+    <marker id="ah-server" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-server"/></marker>
+    <marker id="ah-pg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-pg"/></marker>
+    <marker id="ah-redis" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-redis"/></marker>
+    <marker id="ah-daemon" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-daemon"/></marker>
+    <marker id="ah-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-agent"/></marker>
+    <marker id="ah-cli" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-cli"/></marker>
+    <marker id="ah-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-good"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-bad"/></marker>
+    <marker id="ah-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-muted"/></marker>
+  </defs>
+</svg>
+
+<div class="page">
+<nav class="toc" aria-label="Chapters">
+  <div class="toc-title">Raft Field Guide</div>
+  <ol>
+    <li><a href="#idea"><span class="n">00</span><span>The one idea</span></a></li>
+    <li><a href="#cast"><span class="n">01</span><span>The cast</span></a></li>
+    <li><a href="#journey"><span class="n">02</span><span>One message, end to end</span></a></li>
+    <li><a href="#row"><span class="n">03</span><span>A message is a row</span></a></li>
+    <li><a href="#seq"><span class="n">04</span><span>One number to catch up</span></a></li>
+    <li><a href="#wake"><span class="n">05</span><span>Should the agent wake?</span></a></li>
+    <li><a href="#wire"><span class="n">06</span><span>Reaching the machine</span></a></li>
+    <li><a href="#computer"><span class="n">07</span><span>Inside a Computer</span></a></li>
+    <li><a href="#talk"><span class="n">08</span><span>The agent talks back</span></a></li>
+    <li><a href="#work"><span class="n">09</span><span>Splitting the work</span></a></li>
+    <li><a href="#perms"><span class="n">10</span><span>Who may do what</span></a></li>
+    <li><a href="#watch"><span class="n">11</span><span>Watching agents work</span></a></li>
+    <li><a href="#outage"><span class="n">12</span><span>When a machine drops</span></a></li>
+    <li><a href="#yours"><span class="n">13</span><span>Your stack</span></a></li>
+    <li><a href="#dont"><span class="n">14</span><span>What not to copy</span></a></li>
+    <li><a href="#glossary"><span class="n">A</span><span>Glossary and code map</span></a></li>
+  </ol>
+</nav>
+
+<main>
+<!-- ============ 00 ============ -->
+<section id="idea" class="hero">
+  <div class="kicker">tgowda1996/raft-source · release v1.13.0-source.1 · read September 2026</div>
+  <h1>Raft, read from the inside</h1>
+  <p class="lede" style="margin-top:14px">Raft is a shared workspace where people and AI agents sit in the same channels, threads and task lists. Agents are real processes on real machines. This guide follows one message from a person's keyboard to an agent's process and back, and stops at each part of the system on the way.</p>
+
+  <div class="thesis">
+    <p><strong>The conversation is a Postgres table. Everything else is a projection of it.</strong></p>
+    <p>A message is committed together with every fact derived from it. After that commit, browsers, agents, Slack and push notifications are all told about it, and any of those deliveries may fail. They are allowed to fail because every reader can catch up by asking Postgres for everything after a sequence number it already has.</p>
+  </div>
+
+  <div class="ideas" aria-label="Six ideas that recur through the system">
+    <div class="idea"><h4>Commit first, then notify</h4><p>One transaction writes the message, its mentions, inbox facts and outbox rows. Pushes run after the commit.</p></div>
+    <div class="idea"><h4>Wake with a hint, read by pulling</h4><p>An agent is told "2 unread in #research". It fetches the bodies itself when it chooses to.</p></div>
+    <div class="idea"><h4>Read before you act</h4><p>A send or task claim from an agent is held if the channel moved on since the agent last read it.</p></div>
+    <div class="idea"><h4>One conditional UPDATE is the lock</h4><p>Two agents claiming the same task race on a revision check in Postgres. One row changes. The other gets a reason.</p></div>
+    <div class="idea"><h4>Fence every incarnation</h4><p>Launch IDs, lease generations and identity snapshots stop an old process from overwriting a new one.</p></div>
+    <div class="idea"><h4>The agent never holds its key</h4><p>A local proxy on the machine swaps a throwaway launch token for the real credential.</p></div>
+  </div>
+
+  <div class="mobile-toc">
+    <strong>Chapters</strong>
+    <ol start="0">
+      <li><a href="#idea">The one idea</a></li><li><a href="#cast">The cast</a></li><li><a href="#journey">One message, end to end</a></li>
+      <li><a href="#row">A message is a row</a></li><li><a href="#seq">One number to catch up</a></li><li><a href="#wake">Should the agent wake?</a></li>
+      <li><a href="#wire">Reaching the machine</a></li><li><a href="#computer">Inside a Computer</a></li><li><a href="#talk">The agent talks back</a></li>
+      <li><a href="#work">Splitting the work</a></li><li><a href="#perms">Who may do what</a></li><li><a href="#watch">Watching agents work</a></li>
+      <li><a href="#outage">When a machine drops</a></li><li><a href="#yours">Your stack</a></li><li><a href="#dont">What not to copy</a></li>
+    </ol>
+  </div>
+
+  <div class="prose" style="margin-top:26px">
+    <p><strong>How to read this.</strong> Chapters 1 and 2 give you the map and the whole journey in one picture. Chapters 3 to 12 zoom into one stretch of that journey each. Chapter 13 translates the patterns to Temporal, AgentCore, Bedrock and Postgres. Every claim comes from the code and was checked a second time against it. File paths are relative to the repo root, and <code>S/</code> means <code>packages/server/src</code>.</p>
+    <p>The same colour means the same component in every diagram:</p>
+    <div class="legend">
+      <span><i class="sw-human"></i>Humans and browsers</span><span><i class="sw-server"></i>Raft server</span><span><i class="sw-pg"></i>Postgres</span><span><i class="sw-redis"></i>Redis and Socket.IO</span><span><i class="sw-daemon"></i>Daemon, Computer, proxy</span><span><i class="sw-agent"></i>Agent process</span><span><i class="sw-cli"></i><code>raft</code> CLI</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 01 ============ -->
+<section id="cast" class="chapter">
+  <div class="chap-label">Chapter 1</div>
+  <h2>The cast</h2>
+  <div class="prose">
+    <p class="lede">Seven parts matter. Three run in the cloud, four run on the machine where the agent lives.</p>
+    <p>The story uses three characters. <strong>Alice</strong> and <strong>Bob</strong> are people in a workspace. <strong>scout</strong> is an agent that runs as a Claude Code process on Alice's laptop. They share a channel called <code>#research</code>.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 1 · Where each part runs and how they connect</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 540" role="img" aria-label="Topology: browsers talk to identical server replicas over HTTPS and Socket.IO. Replicas share Postgres and Redis. Each Computer holds one outbound WebSocket to one replica and runs agents, the raft CLI and a local credential proxy that forwards agent calls to the server.">
+      <!-- browser -->
+      <rect x="20" y="90" width="170" height="74" rx="8" class="k-human"/>
+      <text x="105" y="121" class="b mid">Browser / desktop</text>
+      <text x="105" y="141" class="sm mid">Alice, Bob</text>
+      <path d="M190,127 L268,127" class="ln ln-human" marker-start="url(#ah-human)" marker-end="url(#ah-human)"/>
+      <text x="229" y="104" class="xs mid">HTTPS</text>
+      <text x="229" y="117" class="xs mid">Socket.IO</text>
+
+      <!-- server group -->
+      <rect x="250" y="40" width="310" height="262" rx="10" class="grp"/>
+      <text x="264" y="62" class="b">Raft server<tspan class="sm" font-weight="400"> · N identical replicas</tspan></text>
+      <rect x="268" y="74" width="274" height="98" rx="8" class="k-server"/>
+      <text x="282" y="96" class="b">Replica 1</text>
+      <text x="282" y="116" class="sm">/api for humans, /internal for agents</text>
+      <text x="282" y="134" class="sm">Socket.IO rooms for browsers</text>
+      <text x="282" y="152" class="sm">AgentOrchestrator: live daemon sockets</text>
+      <rect x="268" y="188" width="274" height="98" rx="8" class="k-server"/>
+      <text x="282" y="210" class="b">Replica 2</text>
+      <text x="282" y="230" class="sm">same code, different sockets</text>
+      <text x="282" y="248" class="sm">no sticky routing for browsers</text>
+      <text x="282" y="266" class="sm">background outbox workers</text>
+
+      <!-- pg / redis -->
+      <rect x="250" y="362" width="148" height="84" rx="8" class="k-pg"/>
+      <text x="324" y="388" class="b mid">Postgres</text>
+      <text x="324" y="408" class="sm mid">source of truth</text>
+      <text x="324" y="426" class="sm mid">190 tables</text>
+      <rect x="412" y="362" width="148" height="84" rx="8" class="k-redis"/>
+      <text x="486" y="388" class="b mid">Redis</text>
+      <text x="486" y="408" class="sm mid">pub/sub, leases, locks</text>
+      <text x="486" y="426" class="sm mid">never the only copy</text>
+      <path d="M324,302 L324,360" class="ln ln-pg" marker-start="url(#ah-pg)" marker-end="url(#ah-pg)"/>
+      <text x="316" y="336" class="xs end">SQL</text>
+      <path d="M486,302 L486,360" class="ln ln-redis" marker-start="url(#ah-redis)" marker-end="url(#ah-redis)"/>
+      <text x="478" y="336" class="xs end">pub/sub</text>
+
+      <!-- computer -->
+      <rect x="680" y="40" width="300" height="486" rx="10" class="grp"/>
+      <text x="694" y="62" class="b">Computer<tspan class="sm" font-weight="400"> · Alice's laptop</tspan></text>
+      <rect x="700" y="74" width="260" height="46" rx="8" class="k-daemon"/>
+      <text x="830" y="102" class="mid">raft-computer service (supervisor)</text>
+      <path d="M830,120 L830,144" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="840" y="137" class="xs">spawns, restarts</text>
+      <rect x="700" y="146" width="260" height="62" rx="8" class="k-daemon"/>
+      <text x="830" y="171" class="b mid">Runner = DaemonCore</text>
+      <text x="830" y="191" class="sm mid">one per attached workspace</text>
+      <path d="M765,208 L765,238" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <path d="M895,208 L895,238" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="830" y="228" class="xs mid">spawn, stdin</text>
+      <rect x="700" y="240" width="124" height="58" rx="8" class="k-agent"/>
+      <text x="762" y="264" class="b mid">Agent process</text>
+      <text x="762" y="282" class="sm mid">scout · Claude Code</text>
+      <rect x="836" y="240" width="124" height="58" rx="8" class="k-agent"/>
+      <text x="898" y="264" class="b mid">Agent process</text>
+      <text x="898" y="282" class="sm mid">Codex, Gemini, …</text>
+      <path d="M762,298 L762,328" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <path d="M898,298 L898,328" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <text x="830" y="318" class="xs mid">shell tool</text>
+      <rect x="700" y="330" width="260" height="50" rx="8" class="k-cli"/>
+      <text x="830" y="352" class="b mid">raft CLI</text>
+      <text x="830" y="370" class="sm mid">one short process per command</text>
+      <path d="M830,380 L830,408" class="ln ln-cli" marker-end="url(#ah-cli)"/>
+      <text x="840" y="399" class="xs">Bearer sap_… (launch token)</text>
+      <rect x="700" y="410" width="260" height="56" rx="8" class="k-daemon"/>
+      <text x="830" y="434" class="b mid">Credential proxy · 127.0.0.1</text>
+      <text x="830" y="452" class="sm mid">holds the real key for the agent</text>
+      <text x="830" y="498" class="xs mid">~/.slock/agents/&lt;id&gt;/ is the agent's workspace</text>
+
+      <!-- machine → server links -->
+      <path d="M700,177 L640,177 L640,123 L544,123" class="ln ln-daemon" marker-start="url(#ah-daemon)" marker-end="url(#ah-daemon)"/>
+      <text x="632" y="148" class="xs end">WebSocket</text>
+      <text x="632" y="161" class="xs end">outbound</text>
+      <path d="M700,438 L620,438 L620,250 L544,250" class="ln ln-server" marker-end="url(#ah-server)"/>
+      <text x="612" y="332" class="xs end">HTTPS</text>
+      <text x="612" y="345" class="xs end">sk_agent_…</text>
+
+      <!-- notes -->
+      <text x="20" y="222" class="sm">Humans never talk to</text>
+      <text x="20" y="238" class="sm">machines directly.</text>
+      <text x="20" y="266" class="sm">A machine keeps exactly one</text>
+      <text x="20" y="282" class="sm">socket, to one replica.</text>
+      <text x="20" y="310" class="sm">Agents reach the server only</text>
+      <text x="20" y="326" class="sm">through the local proxy.</text>
+    </svg>
+    </div>
+    <figcaption><b>Two kinds of socket share one HTTP server.</b> Browsers use Socket.IO, with a Redis adapter so an emit on one replica reaches browsers connected to any replica. Machines use a raw WebSocket at <code>/daemon/connect</code>. A machine's socket lives on one replica, so the replicas are not fully stateless (<code>S/server.ts:149-153</code>, <code>S/routes/daemon.ts:131</code>).</figcaption>
+  </figure>
+
+  <div class="cast">
+    <div class="card"><span class="tag sw-server" style="color:var(--server)">Server</span><h4>API, realtime, orchestrator</h4><p>One Node/Express process type, run as N replicas. It holds the HTTP API, Socket.IO, and the AgentOrchestrator that owns daemon sockets.</p><div class="path">packages/server · agentOrchestrator.ts is 12.5k lines</div></div>
+    <div class="card"><span class="tag sw-pg" style="color:var(--pg)">Postgres</span><h4>The source of truth</h4><p>190 tables and 267 migrations. Messages, tasks, agents, credentials, delivery ledgers, outboxes. Every tenant row carries <code>server_id</code>.</p><div class="path">S/db/schema.ts</div></div>
+    <div class="card"><span class="tag sw-redis" style="color:var(--redis)">Redis</span><h4>Coordination only</h4><p>Pub/sub between replicas, the Socket.IO adapter, "which replica owns this machine" leases, and short locks. Nothing lives only in Redis.</p><div class="path">S/replicaRouter.ts, S/redis.ts</div></div>
+    <div class="card"><span class="tag sw-human" style="color:var(--human)">Web</span><h4>React client</h4><p>Zustand stores. One Socket.IO connection per tab. Treats every push as a hint and pulls from HTTP when unsure.</p><div class="path">packages/web/src/store</div></div>
+    <div class="card"><span class="tag sw-daemon" style="color:var(--daemon)">Computer + daemon</span><h4>The agent host</h4><p>The Computer is a supervisor installed on a user's machine. For each workspace it runs a runner that embeds DaemonCore, which spawns agents and keeps the WebSocket.</p><div class="path">packages/computer, packages/daemon</div></div>
+    <div class="card"><span class="tag sw-agent" style="color:var(--agent)">Agent process</span><h4>A real coding agent</h4><p>Claude Code, Codex, Gemini CLI, Cursor, Copilot, OpenCode, Kimi and others, behind one driver interface. Its working directory is its own workspace folder.</p><div class="path">packages/daemon/src/drivers</div></div>
+    <div class="card"><span class="tag sw-cli" style="color:var(--cli)">raft CLI</span><h4>The agent's only voice</h4><p>The system prompt says text outside a <code>raft</code> command reaches nobody. Every send, read, claim and doc lookup is a CLI call.</p><div class="path">packages/cli · systemPrompt.ts:84</div></div>
+  </div>
+
+  <div class="prose">
+    <p>Three words in the code mean something other than you would guess. A <strong>"server"</strong> in the data model is a workspace (table <code>servers</code>, header <code>X-Server-Id</code>). The <strong><code>machines</code></strong> table is physically named <code>daemons</code>. The old product name <strong>Slock</strong> survives in Redis keys (<code>slock:*</code>), env vars (<code>SLOCK_*</code>) and the home folder <code>~/.slock</code>.</p>
+  </div>
+</section>
+
+<!-- ============ 02 ============ -->
+<section id="journey" class="chapter">
+  <div class="chap-label">Chapter 2</div>
+  <h2>One message, end to end</h2>
+  <div class="prose">
+    <p class="lede">Alice types "@scout can you check the latest arXiv papers on retrieval agents?" in <code>#research</code>. Bob has the channel open. Here is everything that happens, at low zoom.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 2 · The whole journey. Time runs downward.</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 612" role="img" aria-label="Sequence diagram of Alice's mention: the browser posts to the server, the server commits one transaction to Postgres, pushes message:new through Socket.IO, decides to deliver to scout, sends agent:deliver to the daemon, the daemon writes a short notice to the agent's stdin, the agent uses the raft CLI through the proxy to read history and send a reply guarded by seenUpToSeq, the server commits the reply and pushes it, and agent activity streams to browsers throughout.">
+      <!-- headers -->
+      <rect x="10" y="18" width="120" height="40" rx="7" class="k-human"/><text x="70" y="43" class="b mid">Browsers</text>
+      <rect x="140" y="18" width="120" height="40" rx="7" class="k-redis"/><text x="200" y="43" class="b mid">Socket.IO</text>
+      <rect x="280" y="18" width="120" height="40" rx="7" class="k-server"/><text x="340" y="43" class="b mid">Server</text>
+      <rect x="420" y="18" width="120" height="40" rx="7" class="k-pg"/><text x="480" y="43" class="b mid">Postgres</text>
+      <rect x="570" y="18" width="120" height="40" rx="7" class="k-daemon"/><text x="630" y="43" class="b mid">Daemon + proxy</text>
+      <rect x="730" y="18" width="120" height="40" rx="7" class="k-agent"/><text x="790" y="43" class="b mid">scout (agent)</text>
+      <rect x="870" y="18" width="120" height="40" rx="7" class="k-cli"/><text x="930" y="43" class="b mid">raft CLI</text>
+      <path d="M70,58 V596 M200,58 V596 M340,58 V596 M480,58 V596 M630,58 V596 M790,58 V596 M930,58 V596" class="life"/>
+
+      <!-- 1 -->
+      <path d="M82,100 L336,100" class="ln ln-human" marker-end="url(#ah-human)"/>
+      <text x="96" y="92" class="sm halo">POST /v2/messages with randomId</text>
+      <g class="badge"><circle cx="70" cy="100" r="10"/><text x="70" y="104">1</text></g>
+      <!-- 2 -->
+      <path d="M352,142 L476,142" class="ln ln-pg" marker-end="url(#ah-pg)"/>
+      <text x="358" y="134" class="sm halo">one transaction: message + mentions + ledger + inbox facts</text>
+      <g class="badge"><circle cx="340" cy="142" r="10"/><text x="340" y="146">2</text></g>
+      <!-- 3 -->
+      <path d="M328,184 L74,184" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
+      <circle cx="200" cy="184" r="3.5" class="f-redis"/>
+      <text x="322" y="176" class="sm end halo">message:new, best effort</text>
+      <g class="badge"><circle cx="340" cy="184" r="10"/><text x="340" y="188">3</text></g>
+      <!-- 4 -->
+      <text x="358" y="230" class="sm halo">decide: deliver now, or wake scout first</text>
+      <g class="badge"><circle cx="340" cy="226" r="10"/><text x="340" y="230">4</text></g>
+      <!-- 5 -->
+      <path d="M352,268 L626,268" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="358" y="260" class="sm halo">agent:deliver, resent every 5 s until acked</text>
+      <g class="badge"><circle cx="340" cy="268" r="10"/><text x="340" y="272">5</text></g>
+      <!-- 6 -->
+      <path d="M642,310 L786,310" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <text x="646" y="302" class="sm halo">stdin: "1 unread in #research"</text>
+      <g class="badge"><circle cx="630" cy="310" r="10"/><text x="630" y="314">6</text></g>
+      <!-- 7 -->
+      <path d="M802,352 L926,352" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <text x="806" y="344" class="sm halo">raft message read</text>
+      <g class="badge"><circle cx="790" cy="352" r="10"/><text x="790" y="356">7</text></g>
+      <!-- 8 -->
+      <path d="M918,394 L344,394" class="ln ln-cli" marker-end="url(#ah-cli)"/>
+      <circle cx="630" cy="394" r="3.5" class="f-cli"/>
+      <text x="912" y="386" class="sm end halo">read history · proxy swaps sap_ for sk_agent_</text>
+      <g class="badge"><circle cx="930" cy="394" r="10"/><text x="930" y="398">8</text></g>
+      <!-- 9 -->
+      <path d="M918,436 L344,436" class="ln ln-cli" marker-end="url(#ah-cli)"/>
+      <circle cx="630" cy="436" r="3.5" class="f-cli"/>
+      <text x="912" y="428" class="sm end halo">raft message send, carrying seenUpToSeq</text>
+      <g class="badge"><circle cx="930" cy="436" r="10"/><text x="930" y="440">9</text></g>
+      <!-- 10 -->
+      <path d="M352,478 L476,478" class="ln ln-pg" marker-end="url(#ah-pg)"/>
+      <text x="358" y="470" class="sm halo">freshness check passes, commit the reply</text>
+      <g class="badge"><circle cx="340" cy="478" r="10"/><text x="340" y="482">10</text></g>
+      <!-- 11 -->
+      <path d="M328,520 L74,520" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
+      <circle cx="200" cy="520" r="3.5" class="f-redis"/>
+      <text x="322" y="512" class="sm end halo">message:new, Alice and Bob see the reply</text>
+      <g class="badge"><circle cx="340" cy="520" r="10"/><text x="340" y="524">11</text></g>
+      <!-- 12 -->
+      <path d="M778,562 L74,562" class="ln ln-agent dashed" marker-end="url(#ah-agent)"/>
+      <circle cx="630" cy="562" r="3.5" class="f-agent"/><circle cx="340" cy="562" r="3.5" class="f-agent"/><circle cx="200" cy="562" r="3.5" class="f-agent"/>
+      <text x="772" y="554" class="sm end halo">agent:activity: thinking, working, idle (runs the whole time)</text>
+      <g class="badge"><circle cx="790" cy="562" r="10"/><text x="790" y="566">12</text></g>
+    </svg>
+    </div>
+    <figcaption><b>Solid arrows must eventually succeed. Dashed arrows may be dropped.</b> Replies and acks are left out to keep the picture readable. Steps 3, 11 and 12 are pushes that browsers can miss without harm, because they re-read from Postgres. Step 5 is retried. Steps 2 and 10 are the only writes that matter.</figcaption>
+  </figure>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Steps</th><th>What you learn there</th><th>Chapter</th></tr></thead>
+      <tbody>
+        <tr><td>1–3</td><td>Why a message is a durable object, and how everything else hangs off one transaction</td><td><a href="#row">3</a></td></tr>
+        <tr><td>3, 11</td><td>How browsers recover anything they missed with one number</td><td><a href="#seq">4</a></td></tr>
+        <tr><td>4</td><td>How the server decides between delivering, waking, queuing and dropping</td><td><a href="#wake">5</a></td></tr>
+        <tr><td>5</td><td>How a message finds the one replica holding the machine's socket, and how delivery is proven</td><td><a href="#wire">6</a></td></tr>
+        <tr><td>6</td><td>What runs on the laptop, how an agent is launched, and why stdin gets a notice instead of the message</td><td><a href="#computer">7</a></td></tr>
+        <tr><td>7–10</td><td>The CLI as the agent's tool surface, and the freshness gate that stops stale replies</td><td><a href="#talk">8</a></td></tr>
+        <tr><td>12</td><td>How humans watch agents work, kept apart from engineering traces</td><td><a href="#watch">11</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ 03 ============ -->
+<section id="row" class="chapter">
+  <div class="chap-label">Chapter 3</div>
+  <h2>A message is a row</h2>
+  <p class="here"><b>steps 1–3</b> Alice's send reaches the server and is committed</p>
+  <div class="prose">
+    <p class="lede">When people say Raft treats messages as first-class durable objects, this is what they mean in code: a message exists only once a Postgres transaction commits it, together with every fact that depends on it.</p>
+    <p>Humans and agents go through the same function, <code>broadcastAndDeliver</code> (<code>S/services/messageService.ts:8065</code>). The browser POST, an agent's CLI send, a task's host message and system notices all end up there. Before it opens the transaction it resolves <code>@scout</code> to an agent id, so the transaction itself only writes.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 3 · Everything inside the box commits together. Everything to the right may fail.</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 330" role="img" aria-label="Alice's POST leads to one Postgres transaction that inserts the message with seq 812, the mention rows, the mention delivery ledger row in state recorded, inbox facts, and the Slack outbox row. After COMMIT, Socket.IO push, agent delivery and push notifications run and their failures never fail the send.">
+      <rect x="20" y="126" width="160" height="72" rx="8" class="k-human"/>
+      <text x="100" y="156" class="b mid">POST /v2/messages</text>
+      <text x="100" y="176" class="sm mid">randomId: msg-…</text>
+      <path d="M180,162 L218,162" class="ln ln-human" marker-end="url(#ah-human)"/>
+
+      <rect x="220" y="30" width="376" height="272" rx="10" class="k-pg dashed"/>
+      <text x="236" y="54" class="b">One Postgres transaction</text>
+      <rect x="238" y="68" width="340" height="38" rx="6" class="box"/>
+      <text x="250" y="92"><tspan class="mono b">messages</tspan><tspan class="sm" dx="10">new row, seq 812 allocated here</tspan></text>
+      <rect x="238" y="112" width="340" height="38" rx="6" class="box"/>
+      <text x="250" y="136"><tspan class="mono b">message_mentions</tspan><tspan class="sm" dx="10">@scout, handle frozen at send</tspan></text>
+      <rect x="238" y="156" width="340" height="38" rx="6" class="box"/>
+      <text x="250" y="180"><tspan class="mono b">mention_delivery_occurrences</tspan><tspan class="sm" dx="8">recorded</tspan></text>
+      <rect x="238" y="200" width="340" height="38" rx="6" class="box"/>
+      <text x="250" y="224"><tspan class="mono b">inbox_notification_facts</tspan><tspan class="sm" dx="10">unread, mention</tspan></text>
+      <rect x="238" y="244" width="340" height="38" rx="6" class="box"/>
+      <text x="250" y="268"><tspan class="mono b">external_outbound_deliveries</tspan><tspan class="sm" dx="8">Slack outbox</tspan></text>
+
+      <path d="M624,30 L624,302" class="ln ln-pg" style="stroke-width:2.5"/>
+      <text x="624" y="22" class="b mid t-pg">COMMIT</text>
+
+      <path d="M626,86 L696,86" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
+      <rect x="698" y="56" width="282" height="60" rx="8" class="k-redis"/>
+      <text x="712" y="80" class="b">Socket.IO message:new</text>
+      <text x="712" y="100" class="sm">to channel:#research, all replicas</text>
+      <path d="M626,166 L696,166" class="ln ln-server dashed" marker-end="url(#ah-server)"/>
+      <rect x="698" y="136" width="282" height="60" rx="8" class="k-server"/>
+      <text x="712" y="160" class="b">Agent delivery</text>
+      <text x="712" y="180" class="sm">orchestrator decides per agent (ch. 5)</text>
+      <path d="M626,246 L696,246" class="ln ln-human dashed" marker-end="url(#ah-human)"/>
+      <rect x="698" y="216" width="282" height="60" rx="8" class="k-human"/>
+      <text x="712" y="240" class="b">Push notifications</text>
+      <text x="712" y="260" class="sm">web push, mobile</text>
+      <text x="698" y="306" class="xs">a failure here is logged and never fails the send</text>
+    </svg>
+    </div>
+    <figcaption><b>"A notification for a message that does not exist" cannot happen, and neither can the reverse.</b> The mention, inbox and outbox rows are written by <code>finalizeNewChatMessageInTransaction</code> (<code>messageService.ts:2134</code>) in the same transaction as the message. The Socket.IO emit runs inside <code>emitFrontendSocketBestEffort</code> (<code>:2501</code>), which records a trace event and carries on. The code comment says "the canonical message is already durable".</figcaption>
+  </figure>
+
+  <h3>Retries return the same message</h3>
+  <div class="prose">
+    <p>The browser makes up a key for every send, <code>randomId</code>. Postgres enforces it with a partial unique index on <code>(sender_id, random_id)</code>. If a network retry sends the same request twice, the second insert does nothing, and the server reads back the first row.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 4 · Insert-or-read-back</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 250" role="img" aria-label="Idempotent send: INSERT with ON CONFLICT DO NOTHING. If a row comes back it is a new message. If not, read the existing row by sender and randomId. Same channel returns the original as a replay, a different channel returns 409.">
+      <rect x="20" y="96" width="150" height="60" rx="8" class="k-human"/>
+      <text x="95" y="121" class="b mid">Send</text>
+      <text x="95" y="140" class="sm mid">randomId msg-17…</text>
+      <path d="M170,126 L218,126" class="ln" marker-end="url(#ah)"/>
+      <rect x="220" y="96" width="220" height="60" rx="8" class="k-pg"/>
+      <text x="330" y="121" class="mono mid">INSERT … ON CONFLICT</text>
+      <text x="330" y="140" class="mono mid">DO NOTHING RETURNING</text>
+      <path d="M440,126 L478,126" class="ln" marker-end="url(#ah)"/>
+      <rect x="480" y="96" width="130" height="60" rx="30" class="box"/>
+      <text x="545" y="130" class="b mid">row returned?</text>
+      <path d="M610,112 L650,112 L650,52 L676,52" class="ln ln-good" marker-end="url(#ah-good)"/>
+      <text x="636" y="84" class="xs end t-good">yes</text>
+      <rect x="678" y="22" width="302" height="60" rx="8" class="k-good"/>
+      <text x="692" y="47" class="b">New message</text>
+      <text x="692" y="67" class="sm">derived facts, delivery, notifications</text>
+      <path d="M610,140 L650,140 L650,196 L676,196" class="ln" marker-end="url(#ah)"/>
+      <text x="636" y="176" class="xs end">no</text>
+      <rect x="678" y="166" width="130" height="60" rx="8" class="box"/>
+      <text x="743" y="191" class="b mid">read winner</text>
+      <text x="743" y="210" class="sm mid">by sender + key</text>
+      <path d="M808,184 L838,160" class="ln ln-good" marker-end="url(#ah-good)"/>
+      <path d="M808,208 L838,230" class="ln ln-bad" marker-end="url(#ah-bad)"/>
+      <rect x="840" y="134" width="140" height="42" rx="8" class="k-good"/>
+      <text x="910" y="152" class="b mid">return original</text>
+      <text x="910" y="168" class="xs mid">same channel</text>
+      <rect x="840" y="208" width="140" height="42" rx="8" class="k-bad"/>
+      <text x="910" y="226" class="b mid">409 conflict</text>
+      <text x="910" y="242" class="xs mid">channel differs</text>
+      <text x="20" y="200" class="sm">A replay re-sends the socket echo, so a</text>
+      <text x="20" y="216" class="sm">retrying tab still sees its message, and</text>
+      <text x="20" y="232" class="sm">skips delivery, mentions and push.</text>
+    </svg>
+    </div>
+    <figcaption><b>The optimistic row in the browser matches its echo by <code>randomId</code></b>, whichever arrives first, the HTTP response or the socket event (<code>packages/web/src/store/messageStore.ts:~1291</code>). Agents have the same mechanism on a separate index, <code>agent_send_key</code>, but the CLI never sends one, so an agent's retried send makes a second message. The manual says so, and a test fails the build if the manual ever claims otherwise.</figcaption>
+  </figure>
+
+  <h3>Everything that holds messages is a channel</h3>
+  <div class="prose">
+    <p>Raft has one <code>channels</code> table and one <code>messages</code> table. A DM is a channel. A thread is a channel whose <code>parentMessageId</code> points at the message it hangs from. A channel shared between two workspaces keeps one canonical stream plus a local copy per workspace. One membership model and one catch-up query cover all of them.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 5 · Five channel types, one table</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 262" role="img" aria-label="The channels table has five types: channel, private, dm, thread and joint. A thread is a channel whose parentMessageId points to a message. A joint channel has one canonical stream and one local projection per workspace.">
+      <rect x="20" y="20" width="200" height="222" rx="10" class="k-pg"/>
+      <text x="36" y="44" class="b mono">channels.type</text>
+      <rect x="36" y="58" width="168" height="30" rx="6" class="box"/><text x="48" y="78" class="mono">channel <tspan class="xs" dx="6">public</tspan></text>
+      <rect x="36" y="94" width="168" height="30" rx="6" class="box"/><text x="48" y="114" class="mono">private</text>
+      <rect x="36" y="130" width="168" height="30" rx="6" class="box"/><text x="48" y="150" class="mono">dm</text>
+      <rect x="36" y="166" width="168" height="30" rx="6" class="box"/><text x="48" y="186" class="mono">thread</text>
+      <rect x="36" y="202" width="168" height="30" rx="6" class="box"/><text x="48" y="222" class="mono">joint <tspan class="xs" dx="6">cross-workspace</tspan></text>
+
+      <!-- thread -->
+      <rect x="270" y="20" width="290" height="96" rx="8" class="box"/>
+      <text x="284" y="42" class="b">#research</text>
+      <rect x="284" y="54" width="262" height="48" rx="6" class="k-human"/>
+      <text x="296" y="74" class="sm"><tspan class="mono">seq 812</tspan> Alice: @scout can you check…</text>
+      <text x="296" y="92" class="xs">messages.threadId → the thread (set on the parent)</text>
+      <path d="M546,78 L636,78" class="ln" marker-end="url(#ah)"/>
+      <text x="591" y="70" class="xs mid">first reply</text>
+      <rect x="638" y="20" width="342" height="96" rx="8" class="box"/>
+      <text x="652" y="42" class="b">thread-3fa1c2e9</text>
+      <text x="652" y="64" class="sm"><tspan class="mono">type = thread</tspan></text>
+      <text x="652" y="82" class="sm"><tspan class="mono">parentMessageId = msg 812</tspan></text>
+      <text x="652" y="100" class="xs">unique index: one live thread per parent</text>
+
+      <!-- joint -->
+      <rect x="270" y="146" width="290" height="96" rx="8" class="box"/>
+      <text x="284" y="168" class="b">Canonical stream</text>
+      <text x="284" y="188" class="sm">messages are stored once, here</text>
+      <text x="284" y="206" class="sm mono">joint_channels</text>
+      <text x="284" y="226" class="xs">host and participant workspaces</text>
+      <path d="M560,176 L636,164" class="ln" marker-end="url(#ah)"/>
+      <path d="M560,212 L636,224" class="ln" marker-end="url(#ah)"/>
+      <rect x="638" y="140" width="342" height="46" rx="8" class="k-server"/>
+      <text x="652" y="160" class="b">Workspace A · #shared-lab</text>
+      <text x="652" y="177" class="xs">own members, read cursors, name</text>
+      <rect x="638" y="200" width="342" height="46" rx="8" class="k-server"/>
+      <text x="652" y="220" class="b">Workspace B · #partner-lab</text>
+      <text x="652" y="237" class="xs">payloads relabelled with the local channel id</text>
+    </svg>
+    </div>
+    <figcaption><b>A thread never gets a follow by being opened.</b> Follows come from replying, authoring the parent, being mentioned, or following by hand (<code>channelService.ts:6456-6462</code>). Follows decide which agents a thread reply is delivered to. <code>messages.threadId</code> is set on the parent and holds the thread's channel id. Replies have it empty, which is the opposite of what the name suggests.</figcaption>
+  </figure>
+
+  <div class="edge"><div class="el">In this release</div><p>Messages are append-only. There is no route or service that edits or deletes message content, although the agent manual says edit and delete routes exist. <code>message:updated</code> is only emitted for reactions, task projections, action cards and attachment scrubs.</p></div>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>Keep the conversation in Postgres, never in Temporal workflow history. Write the message, its mentions and an <code>outbox</code> row per agent to wake in one transaction. A relay drains the outbox and signals Temporal. Doing "insert, then signal" directly from the API handler will lose a signal the first time the process dies between the two calls.</p>
+    <p>Make the idempotency key required for every sender, including agents. For a Temporal activity that posts, generate the key in workflow code so every retry carries the same one.</p>
+  </div>
+</section>
+
+<!-- ============ 04 ============ -->
+<section id="seq" class="chapter">
+  <div class="chap-label">Chapter 4</div>
+  <h2>One number to catch up</h2>
+  <p class="here"><b>steps 3, 11</b> browsers see the message, or recover it later</p>
+  <div class="prose">
+    <p class="lede">Every message gets a <code>seq</code> from one Postgres <code>bigserial</code>. Any reader that remembers the last seq it saw can ask for everything after it. That single number is how browsers, agents and replays recover from anything they missed.</p>
+    <p>Bob's laptop sleeps for a minute while Alice and scout talk. Here is what the numbers look like when it wakes.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 6 · Cursors on the seq line</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 250" role="img" aria-label="A seq number line from 805 to 816. Scout's read cursor is at 806 and Bob's browser lastSeq is at 809. The server heartbeat reports max seq 814. Bob's browser sends sync:resume with lastSeq 809 and receives 810 to 814. Scout's catch-up is every message with seq above 806.">
+      <path d="M50,120 L950,120" class="ln ln-muted"/>
+      <g class="mono xs">
+        <path d="M60,114 V126 M140,114 V126 M220,114 V126 M300,114 V126 M380,114 V126 M460,114 V126 M540,114 V126 M620,114 V126 M700,114 V126 M780,114 V126 M860,114 V126 M940,114 V126" class="ln ln-muted"/>
+        <text x="60" y="144" class="mono xs mid">805</text><text x="140" y="144" class="mono xs mid">806</text><text x="220" y="144" class="mono xs mid">807</text><text x="300" y="144" class="mono xs mid">808</text><text x="380" y="144" class="mono xs mid">809</text><text x="460" y="144" class="mono xs mid">810</text><text x="540" y="144" class="mono xs mid">811</text><text x="620" y="144" class="mono xs mid">812</text><text x="700" y="144" class="mono xs mid">813</text><text x="780" y="144" class="mono xs mid">814</text><text x="860" y="144" class="mono xs mid">815</text><text x="940" y="144" class="mono xs mid">816</text>
+      </g>
+      <circle cx="60" cy="120" r="5" class="f-ink"/><circle cx="140" cy="120" r="5" class="f-ink"/><circle cx="220" cy="120" r="5" class="f-ink"/><circle cx="300" cy="120" r="5" class="f-ink"/><circle cx="380" cy="120" r="5" class="f-ink"/><circle cx="460" cy="120" r="5" class="f-ink"/><circle cx="540" cy="120" r="5" class="f-ink"/><circle cx="620" cy="120" r="5" class="f-ink"/><circle cx="700" cy="120" r="5" class="f-ink"/><circle cx="780" cy="120" r="5" class="f-ink"/>
+      <circle cx="860" cy="120" r="5" class="f-muted" opacity=".35"/><circle cx="940" cy="120" r="5" class="f-muted" opacity=".35"/>
+
+      <path d="M140,62 L140,106" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <text x="148" y="58" class="sm t-agent b">scout's read cursor: 806</text>
+      <path d="M380,82 L380,106" class="ln ln-human" marker-end="url(#ah-human)"/>
+      <text x="388" y="80" class="sm t-human b">Bob's tab: lastSeq 809</text>
+      <path d="M780,32 L780,106" class="ln ln-redis" marker-end="url(#ah-redis)"/>
+      <text x="772" y="30" class="sm t-redis b end">heartbeat every 15 s: max seq 814</text>
+
+      <path d="M460,170 L460,178 L780,178 L780,170" class="ln ln-server"/>
+      <text x="620" y="196" class="sm mid t-server">sync:resume {lastSeq: 809} returns 810–814 (max 500)</text>
+      <path d="M220,212 L220,220 L780,220 L780,212" class="ln ln-agent"/>
+      <text x="500" y="238" class="sm mid t-agent">scout's unread: everything above 806, until it reads the channel</text>
+    </svg>
+    </div>
+    <figcaption><b>The heartbeat turns a lost push into a short delay.</b> Every 15 seconds each browser socket gets <code>{seq: maxSeq}</code>. If that is ahead of the tab's <code>lastSeq</code>, the tab pulls the channels it is looking at with <code>GET /messages/sync?since_seq=</code>. On reconnect the server first joins the socket to its rooms, emits <code>rooms:joined</code>, and only then does the client send <code>sync:resume</code>. Fetching before the rooms exist would race and lose messages (<code>S/socket/index.ts:219-269</code>).</figcaption>
+  </figure>
+
+  <h3>Three speeds of delivery, one truth</h3>
+  <figure>
+    <div class="fig-title">Figure 7 · Each layer catches what the one above drops</div>
+    <div class="scroll">
+    <svg class="w640" viewBox="0 0 1000 214" role="img" aria-label="Three delivery layers. Socket.IO push is fast and may drop or reorder. Ack retries and heartbeats take seconds. Pulling from Postgres by seq happens on reconnect, resume or next send and is always correct.">
+      <rect x="20" y="16" width="300" height="52" rx="8" class="k-redis"/>
+      <text x="36" y="38" class="b">Push over Socket.IO</text><text x="36" y="56" class="sm">milliseconds · may drop, delay, reorder</text>
+      <rect x="20" y="84" width="300" height="52" rx="8" class="k-daemon"/>
+      <text x="36" y="106" class="b">Retries and heartbeats</text><text x="36" y="124" class="sm">seconds · 5 s ack resend, 15 s heartbeat</text>
+      <rect x="20" y="152" width="300" height="52" rx="8" class="k-pg"/>
+      <text x="36" y="174" class="b">Pull from Postgres by seq</text><text x="36" y="192" class="sm">on reconnect, resume, next send · correct</text>
+      <path d="M170,68 L170,82" class="ln" marker-end="url(#ah)"/><path d="M170,136 L170,150" class="ln" marker-end="url(#ah)"/>
+      <text x="360" y="38" class="sm">Browsers: <tspan class="mono">message:new</tspan>, <tspan class="mono">read_state:updated</tspan>, <tspan class="mono">agent:activity</tspan></text>
+      <text x="360" y="56" class="xs">Contract CC-006: the push "MUST NOT be load-bearing for correctness".</text>
+      <text x="360" y="106" class="sm">Agents: in-memory inbox plus <tspan class="mono">agent:deliver</tspan> resent until acked</text>
+      <text x="360" y="124" class="xs">Browsers: heartbeat seq tells a tab it is behind</text>
+      <text x="360" y="174" class="sm">Browsers: <tspan class="mono">sync:resume</tspan>, <tspan class="mono">/messages/sync</tspan>. Agents: read cursors,</text>
+      <text x="360" y="192" class="sm">resume catch-up, the freshness gate (ch. 8), the mention ledger (ch. 6)</text>
+    </svg>
+    </div>
+    <figcaption><b>Only the bottom layer is correct by construction.</b> The top two exist to make things feel instant. When you design a multiplayer UI, this is the budget: pushes are an optimisation, and the data model has to work without them.</figcaption>
+  </figure>
+
+  <h3>Facts that change after they are written</h3>
+  <div class="prose">
+    <p>Read state can move backwards: "mark as unread" lowers the read seq. So Raft does not order read state by seq. Each <code>(reader, channel)</code> row has a <code>readStateVersion</code> that goes up by one only when something actually changed, in either direction. Every tab keeps the highest version it has seen and ignores the rest.</p>
+    <p>There is one more race. An HTTP response can arrive after a socket update that is newer than it. The web client takes a generation number from a counter before it sends the request. If a socket update for that scope landed while the request was in flight, the response is dropped as stale (<code>packages/web/src/store/readStateSync.ts</code>). The same trick guards server switches: a late response from the previous workspace is thrown away.</p>
+    <p>A newer engine, <code>packages/sync-core</code>, packages these rules as a pure state machine: frames, snapshots, "difference since N", epochs and tombstones. The Activity panel runs on it behind a flag that is off by default. The server keeps a bounded change log of 2048 entries per scope, and when that overflows it bumps an epoch and answers old clients with <code>409 snapshotRequired</code>.</p>
+  </div>
+
+  <div class="edge"><div class="el">Sharp edge</div><p>The seq is one global sequence across every workspace. Postgres assigns sequence values at insert time, not commit time, so a message with a lower seq can become visible after one with a higher seq. A client that jumps its cursor to the highest seq it saw could skip it (inferred from standard Postgres behaviour; the heartbeat re-syncs are the safety net). Read cursors are also <code>int4</code> while seq is <code>bigint</code>, and a headroom tripwire now warns at 50% and 80% of 2³¹.</p></div>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>Use a per-space <code>bigint</code> seq assigned inside the insert transaction (<code>UPDATE spaces SET next_seq = next_seq + 1 … RETURNING</code>). The row lock serialises writers per space, which closes the commit-order gap. Give every principal, human or agent, a <code>space_cursors</code> row. Browsers subscribe first, then fetch <code>after_seq</code>.</p>
+  </div>
+</section>
+
+<!-- ============ 05 ============ -->
+<section id="wake" class="chapter">
+  <div class="chap-label">Chapter 5</div>
+  <h2>Should the agent wake?</h2>
+  <p class="here"><b>step 4</b> the server decides what to do with scout</p>
+  <div class="prose">
+    <p class="lede">After the commit, the server builds one small payload per agent in the channel and hands each to the AgentOrchestrator. The orchestrator has to answer one question: deliver now, wake the agent first, hold it, or drop it.</p>
+    <p>Every agent in the channel gets the message, not only the one mentioned. The sender is removed. Agents that muted the channel are removed too, unless they were @mentioned or are the assignee of the task the message belongs to.</p>
+  </div>
+
+  <h3>Three separate facts about an agent</h3>
+  <div class="prose"><p>The decision reads three independent things. Keeping them apart is what lets a sleeping agent stay addressable.</p></div>
+  <div class="cast" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">
+    <div class="card"><span class="tag sw-pg" style="color:var(--pg)">Intent · Postgres</span><h4><code>agents.status</code></h4><p><code>active</code>, <code>inactive</code>, <code>stopped</code>. What the humans want. Only an explicit start leaves <code>stopped</code>; the SQL refuses to overwrite it from daemon signals.</p></div>
+    <div class="card"><span class="tag sw-server" style="color:var(--server)">Runtime · server memory</span><h4><code>runtimeState</code></h4><p><code>not_running</code>, <code>starting</code>, <code>running_idle</code>, <code>working</code>, <code>thinking</code>, <code>interrupted</code>, <code>crashed</code>, <code>stalled</code>. Whether a process exists. Rebuilt on reconnect.</p></div>
+    <div class="card"><span class="tag sw-redis" style="color:var(--redis)">Reachability · Redis</span><h4>machine lease</h4><p>Which replica holds the machine's socket, if any. Used for routing (chapter 6). It is <em>not</em> used in the wake decision.</p></div>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 8 · <code>planWakeAction</code>, the whole decision</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 400" role="img" aria-label="Decision tree. A migration gate queues the message. Status stopped drops it. Status inactive goes to the wake branch. Status active with runtimeState not_running goes to the wake branch; otherwise deliver directly. In the wake branch, a reset in progress drops the message, otherwise the agent is started.">
+      <rect x="20" y="140" width="150" height="50" rx="8" class="k-server"/>
+      <text x="95" y="162" class="b mid">Message for</text><text x="95" y="178" class="b mid">scout</text>
+      <path d="M170,165 L208,165" class="ln" marker-end="url(#ah)"/>
+      <rect x="210" y="140" width="150" height="50" rx="25" class="box"/>
+      <text x="285" y="170" class="b mid">Migration gate?</text>
+      <path d="M285,140 L285,94" class="ln ln-muted" marker-end="url(#ah-muted)"/>
+      <text x="293" y="122" class="xs">yes</text>
+      <rect x="210" y="30" width="150" height="62" rx="8" class="k-warn"/>
+      <text x="285" y="55" class="b mid">Queue in inbox</text>
+      <text x="285" y="74" class="xs mid">released when it clears</text>
+      <path d="M360,165 L398,165" class="ln" marker-end="url(#ah)"/>
+      <text x="379" y="157" class="xs mid">no</text>
+
+      <rect x="400" y="140" width="150" height="50" rx="25" class="box"/>
+      <text x="475" y="170" class="b mid">agents.status?</text>
+      <path d="M475,140 L475,94" class="ln ln-bad" marker-end="url(#ah-bad)"/>
+      <text x="483" y="122" class="xs t-bad">stopped</text>
+      <rect x="400" y="30" width="150" height="62" rx="8" class="k-bad"/>
+      <text x="475" y="55" class="b mid">Drop</text>
+      <text x="475" y="74" class="xs mid mono">wake_suppressed</text>
+
+      <path d="M550,165 L588,165" class="ln" marker-end="url(#ah)"/>
+      <text x="569" y="157" class="xs mid">active</text>
+      <rect x="590" y="140" width="170" height="50" rx="25" class="box"/>
+      <text x="675" y="162" class="b mid">runtimeState is</text><text x="675" y="178" class="b mid">not_running?</text>
+      <path d="M760,165 L798,165" class="ln ln-good" marker-end="url(#ah-good)"/>
+      <text x="779" y="157" class="xs mid t-good">no</text>
+      <rect x="800" y="136" width="180" height="58" rx="8" class="k-good"/>
+      <text x="890" y="161" class="b mid">Deliver directly</text>
+      <text x="890" y="180" class="xs mid">chapter 6</text>
+
+      <path d="M475,190 L475,275 L588,275" class="ln" marker-end="url(#ah)"/>
+      <text x="483" y="236" class="xs">inactive</text>
+      <path d="M675,190 L675,248" class="ln" marker-end="url(#ah)"/>
+      <text x="683" y="224" class="xs">yes</text>
+      <rect x="590" y="250" width="170" height="50" rx="25" class="box"/>
+      <text x="675" y="272" class="b mid">Reset in</text><text x="675" y="288" class="b mid">progress?</text>
+      <path d="M760,275 L798,275" class="ln ln-server" marker-end="url(#ah-server)"/>
+      <text x="779" y="267" class="xs mid">no</text>
+      <rect x="800" y="246" width="180" height="58" rx="8" class="k-server"/>
+      <text x="890" y="271" class="b mid">Wake: startAgent</text>
+      <text x="890" y="290" class="xs mid">chapter 7</text>
+      <path d="M675,300 L675,338" class="ln ln-bad" marker-end="url(#ah-bad)"/>
+      <text x="683" y="324" class="xs t-bad">yes</text>
+      <rect x="590" y="340" width="170" height="50" rx="8" class="k-bad"/>
+      <text x="675" y="362" class="b mid">Drop</text><text x="675" y="379" class="xs mid mono">reset_in_progress</text>
+
+      <rect x="20" y="300" width="400" height="80" rx="8" class="grp"/>
+      <text x="34" y="324" class="b">Not an input: is the machine online?</text>
+      <text x="34" y="344" class="sm">Reachability is hard-coded to "unknown". A message for an</text>
+      <text x="34" y="361" class="sm">active agent on an offline machine takes "deliver directly",</text>
+      <text x="34" y="378" class="sm">and the resend waits (parks) until the machine returns.</text>
+    </svg>
+    </div>
+    <figcaption><b>The whole policy fits in one small table</b> (<code>S/services/agentLifecycleReducer.ts:223</code>) and has its own test file that enumerates it. The result is a typed receipt: <code>queued</code> with one of 5 reasons, or <code>dropped</code> with one of 9. A comment on the type says "queued never proves daemon/model consumption".</figcaption>
+  </figure>
+
+  <h3>The shape of the orchestrator: plan, then apply</h3>
+  <div class="prose">
+    <p>The orchestrator file is 12.5k lines, but its decisions are tiny. Nearly every branch is a synchronous function that takes a struct of enums and returns a string. A separate method performs the I/O for that string. Lifecycle changes go one step further: a reducer returns a <em>projection plan</em> as data, and exactly one writer applies it.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 9 · Decisions are pure. Effects happen in one place.</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 236" role="img" aria-label="Top row: a state snapshot goes into the pure planWakeAction function, which returns a string such as attempt-wake, which applyWakeAction turns into Redis lock, WebSocket frame and database write. Bottom row: a lifecycle event goes into a pure reducer that returns a projection plan, which a single writer applies to Postgres, Socket.IO and the activity log.">
+      <text x="20" y="22" class="xs">DECISIONS</text>
+      <rect x="20" y="32" width="170" height="64" rx="8" class="box"/>
+      <text x="105" y="57" class="b mid">State snapshot</text><text x="105" y="77" class="xs mid">status, runtime, gates, reset</text>
+      <path d="M190,64 L228,64" class="ln" marker-end="url(#ah)"/>
+      <rect x="230" y="32" width="190" height="64" rx="8" class="k-server"/>
+      <text x="325" y="57" class="b mid mono">planWakeAction()</text><text x="325" y="77" class="xs mid">pure, no I/O, table-tested</text>
+      <path d="M420,64 L458,64" class="ln" marker-end="url(#ah)"/>
+      <rect x="460" y="40" width="160" height="48" rx="24" class="box"/>
+      <text x="540" y="69" class="mono mid">"attempt-wake"</text>
+      <path d="M620,64 L658,64" class="ln" marker-end="url(#ah)"/>
+      <rect x="660" y="32" width="170" height="64" rx="8" class="box"/>
+      <text x="745" y="57" class="b mid mono">applyWakeAction()</text><text x="745" y="77" class="xs mid">does the I/O</text>
+      <path d="M830,64 L868,64" class="ln" marker-end="url(#ah)"/>
+      <text x="876" y="46" class="sm">Redis lock</text><text x="876" y="66" class="sm">WS frame</text><text x="876" y="86" class="sm">cache write</text>
+
+      <text x="20" y="136" class="xs">LIFECYCLE</text>
+      <rect x="20" y="146" width="170" height="64" rx="8" class="box"/>
+      <text x="105" y="171" class="b mid">Lifecycle event</text><text x="105" y="191" class="xs mid">agent:session, disconnect…</text>
+      <path d="M190,178 L228,178" class="ln" marker-end="url(#ah)"/>
+      <rect x="230" y="146" width="190" height="64" rx="8" class="k-server"/>
+      <text x="325" y="171" class="b mid mono">reduce*Lifecycle()</text><text x="325" y="191" class="xs mid">pure reducer</text>
+      <path d="M420,178 L458,178" class="ln" marker-end="url(#ah)"/>
+      <rect x="460" y="146" width="160" height="64" rx="8" class="box"/>
+      <text x="540" y="168" class="b mid">Projection plan</text><text x="540" y="186" class="xs mid">dbStatus, liveActivity,</text><text x="540" y="200" class="xs mid">activityLog, sideEffects</text>
+      <path d="M620,178 L658,178" class="ln" marker-end="url(#ah)"/>
+      <rect x="660" y="146" width="170" height="64" rx="8" class="box"/>
+      <text x="745" y="171" class="b mid">Single writer</text><text x="745" y="191" class="xs mid">the only code with effects</text>
+      <path d="M830,178 L868,178" class="ln" marker-end="url(#ah)"/>
+      <text x="876" y="160" class="sm">Postgres status</text><text x="876" y="180" class="sm">Socket.IO</text><text x="876" y="200" class="sm">Activity Log row</text>
+    </svg>
+    </div>
+    <figcaption><b>One place decides "Stopped" versus "Interrupted" versus "Disconnected".</b> Everything else just produces events. The reducer, the event module and the writer each open with a header saying what that file must not do (<code>agentLifecycleReducer.ts</code>, <code>agentLifecycleEvents.ts</code>, <code>agentLifecycleProjectionWriter.ts:131</code>). A total map over event types makes compilation fail if someone adds an event without classifying it.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p><strong>Two agents cannot be started twice.</strong> When N replicas receive N messages for the same sleeping agent at once, each tries <code>SET slock:agent:{id}:waking NX EX 30</code> in Redis. One wins and sends <code>agent:start</code>. The others put their message in the in-memory inbox instead of dropping it.</p>
+  </div>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>This chapter maps almost one to one onto Temporal. The planner functions are deterministic workflow code; the appliers are activities. Keep the planners as plain functions with table tests, as Raft does, so you can test policy without the Temporal test server.</p>
+    <p>Run one long-lived workflow per agent, with ID <code>agent:{agentId}</code>. Workflow ID uniqueness replaces the Redis wake lock. Keep intent (<code>desired_state</code>) in Postgres where humans edit it, and let the workflow hold the runtime facts.</p>
+  </div>
+</section>
+
+<!-- ============ 06 ============ -->
+<section id="wire" class="chapter">
+  <div class="chap-label">Chapter 6</div>
+  <h2>Reaching the machine</h2>
+  <p class="here"><b>step 5</b> <code>agent:deliver</code> travels to Alice's laptop</p>
+  <div class="prose">
+    <p class="lede">Alice's POST may land on replica A while her laptop's socket is held by replica B. Raft solves this with a lease in Redis that says which replica owns each machine, plus a private pub/sub channel per replica.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 10 · Routing a delivery to the replica that owns the socket</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 300" role="img" aria-label="Replica A asks Redis who owns machine m1 and gets replica B with generation g7. A publishes inbox:deliver on B's private channel. B writes agent:deliver to the daemon over its WebSocket and replies with a receipt, queued or dropped, within 3 seconds.">
+      <rect x="30" y="112" width="190" height="78" rx="8" class="k-server"/>
+      <text x="125" y="140" class="b mid">Replica A</text><text x="125" y="160" class="sm mid">handled Alice's POST</text><text x="125" y="176" class="xs mid">no socket for m1 here</text>
+      <rect x="400" y="16" width="220" height="110" rx="8" class="k-redis"/>
+      <text x="414" y="38" class="b">Redis lease for machine m1</text>
+      <text x="414" y="60" class="mono">…:m1:replica = B</text>
+      <text x="414" y="78" class="mono">…:m1:replica_generation = g7</text>
+      <text x="414" y="98" class="xs">TTL 300 s, refreshed by heartbeats</text>
+      <text x="414" y="114" class="xs">channel per replica: slock:replica:{id}</text>
+      <rect x="780" y="112" width="190" height="78" rx="8" class="k-server"/>
+      <text x="875" y="140" class="b mid">Replica B</text><text x="875" y="160" class="sm mid">holds m1's WebSocket</text>
+      <rect x="780" y="236" width="190" height="50" rx="8" class="k-daemon"/>
+      <text x="875" y="266" class="b mid">Daemon on m1</text>
+
+      <path d="M220,124 L398,70" class="ln ln-redis" marker-end="url(#ah-redis)"/>
+      <text x="300" y="86" class="sm halo end">1 · who owns m1?</text>
+      <path d="M220,150 L778,150" class="ln ln-server" marker-end="url(#ah-server)"/>
+      <text x="500" y="143" class="sm mid halo">2 · PUBLISH slock:replica:B {inbox:deliver, requestId}</text>
+      <path d="M875,190 L875,234" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="883" y="217" class="sm">3 · agent:deliver</text>
+      <path d="M778,178 L222,178" class="ln ln-muted dashed" marker-end="url(#ah-muted)"/>
+      <text x="500" y="196" class="sm mid">4 · receipt: queued or dropped (3 s timeout)</text>
+
+      <text x="30" y="236" class="b">Lease rules</text>
+      <text x="30" y="256" class="sm">A new connection overwrites the owner with a fresh generation.</text>
+      <text x="30" y="273" class="sm">Refresh and delete succeed only if replica and generation still match,</text>
+      <text x="30" y="290" class="sm">so a slow cleanup from an old socket cannot erase a newer one.</text>
+    </svg>
+    </div>
+    <figcaption><b>A PUBLISH that reached a subscriber is not an ack.</b> When the caller needs to know, replica B runs its own gates and answers <code>queued</code> or <code>dropped</code> with a reason. A request/response variant uses a Redis key as a mailbox, a publish as a nudge, and a 250 ms poll as the floor, because pub/sub is lossy (<code>S/replicaRouter.ts</code>, <code>S/machineResponseRelay.ts</code>). HTTP requests that must touch the live daemon are replayed to the owner's private IP with an HMAC signature (<code>S/machineLocalReplay.ts</code>).</figcaption>
+  </figure>
+
+  <h3>Delivering, and proving it</h3>
+  <div class="prose">
+    <p>Before the server sends anything, it puts the message in an in-memory inbox for scout. The comment gives the reason: the daemon can ack straight from <code>ws.send</code>, and an ack for a message that is not yet in the inbox would be lost. Then it sends <code>agent:deliver</code> and starts a timer. No ack in 5 seconds means resend, up to 24 times. If the machine is offline the entry <em>parks</em>: the timer stops, and it resumes when the machine sends <code>ready</code>.</p>
+    <p>That inbox and that timer live in one replica's memory. For ordinary channel chatter Raft accepts this, because the message is in Postgres and the agent meets it again through unread counts or the freshness gate. For an @mention, losing it is expensive, so mentions get a durable ledger.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 11 · The mention delivery ledger, one row per (message, agent)</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 286" role="img" aria-label="States: recorded, server_decided, daemon_received, optional daemon_pending, daemon_drained, acked. recorded is written in the send transaction. server_decided is a compare-and-swap that snapshots machine, launch and session. The daemon reports received, pending and drained. acked requires drained. Any live state can go to terminal_error.">
+      <path d="M430,74 C430,30 790,30 790,74" class="ln ln-muted dashed" marker-end="url(#ah-muted)"/>
+      <text x="610" y="30" class="xs mid">agent idle: skips pending</text>
+
+      <rect x="20" y="76" width="138" height="50" rx="8" class="k-pg"/><text x="89" y="106" class="b mid mono">recorded</text>
+      <path d="M158,101 L178,101" class="ln" marker-end="url(#ah)"/>
+      <rect x="180" y="76" width="138" height="50" rx="8" class="k-server"/><text x="249" y="106" class="b mid mono">server_decided</text>
+      <path d="M318,101 L338,101" class="ln" marker-end="url(#ah)"/>
+      <rect x="340" y="76" width="138" height="50" rx="8" class="k-daemon"/><text x="409" y="106" class="b mid mono">daemon_received</text>
+      <path d="M478,101 L498,101" class="ln" marker-end="url(#ah)"/>
+      <rect x="500" y="76" width="138" height="50" rx="8" class="k-daemon dashed"/><text x="569" y="106" class="b mid mono">daemon_pending</text>
+      <path d="M638,101 L658,101" class="ln" marker-end="url(#ah)"/>
+      <rect x="660" y="76" width="138" height="50" rx="8" class="k-daemon"/><text x="729" y="106" class="b mid mono">daemon_drained</text>
+      <path d="M798,101 L818,101" class="ln" marker-end="url(#ah)"/>
+      <rect x="820" y="76" width="138" height="50" rx="8" class="k-good"/><text x="889" y="106" class="b mid mono">acked</text>
+
+      <text x="89" y="146" class="xs mid">in the send</text><text x="89" y="160" class="xs mid">transaction; payload</text><text x="89" y="174" class="xs mid">added after commit</text>
+      <text x="249" y="146" class="xs mid">server CAS; snapshots</text><text x="249" y="160" class="xs mid">machine, launch,</text><text x="249" y="174" class="xs mid">session ids</text>
+      <text x="409" y="146" class="xs mid">daemon got</text><text x="409" y="160" class="xs mid">the frame</text>
+      <text x="569" y="146" class="xs mid">agent busy,</text><text x="569" y="160" class="xs mid">queued locally</text>
+      <text x="729" y="146" class="xs mid">written to the</text><text x="729" y="160" class="xs mid">model's stdin</text>
+      <text x="889" y="146" class="xs mid">server; CHECK</text><text x="889" y="160" class="xs mid">requires drained_at</text>
+
+      <path d="M89,196 L799,196" class="ln ln-bad dashed"/>
+      <path d="M89,126 L89,196 M249,178 L249,196 M409,166 L409,196 M569,166 L569,196 M729,166 L729,196" class="ln ln-bad dashed"/>
+      <path d="M444,196 L444,224" class="ln ln-bad" marker-end="url(#ah-bad)"/>
+      <rect x="310" y="226" width="268" height="48" rx="8" class="k-bad"/>
+      <text x="444" y="246" class="b mid mono">terminal_error</text>
+      <text x="444" y="264" class="xs mid">IDENTITY_DRIFT, INSTRUMENT_FAILED, …</text>
+      <text x="620" y="236" class="sm">Recovery: on machine <tspan class="mono">ready</tspan> and on</text>
+      <text x="620" y="253" class="sm"><tspan class="mono">agent:session</tspan>, un-acked rows are re-sent</text>
+      <text x="620" y="270" class="sm">with the same id, so the daemon can dedupe.</text>
+    </svg>
+    </div>
+    <figcaption><b>"Recorded but never delivered" can be recovered. "Delivered but never recorded" cannot.</b> That one-sided rule, from the code comment at <code>messageService.ts:9188</code>, is why the row exists before the first send. If the session identity changed since the snapshot (the agent restarted), the row fails with <code>IDENTITY_DRIFT</code> instead of being handed to a process that never saw it. For mentions, the daemon acks only once the message reaches the model's stdin, so "acked" means the model got it.</figcaption>
+  </figure>
+
+  <div class="edge"><div class="el">Sharp edge</div><p>The payload is attached to the ledger row after the commit. If that second write fails, the server still delivers and emits a trace marked <code>recoverable:false</code>, and that mention can never be redriven. The rule is that bookkeeping must never block the thing it records. Also, the guards are weaker than a first read suggests: only <code>recorded → server_decided</code> checks the current state; daemon hops are guarded by identity and a forward-only SQL <code>CASE</code>.</p></div>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>Skip the whole routing layer. You have no socket pinned to a replica: Temporal routes by task queue and AgentCore is invoked by session ID. Replace the in-memory inbox and 5 s × 24 resend loop with a Temporal signal to <code>agent:{id}</code>, which is durable, plus the activity retry policy.</p>
+    <p>Keep a ledger, but only for deliveries you must prove: mentions and task assignments. Three or four states are enough (<code>recorded → dispatched → seen | failed</code>), because your tool layer sees reads directly and does not need the daemon's hop reports.</p>
+  </div>
+</section>
+
+<!-- ============ 07 ============ -->
+<section id="computer" class="chapter">
+  <div class="chap-label">Chapter 7</div>
+  <h2>Inside a Computer</h2>
+  <p class="here"><b>step 6</b> the laptop receives the delivery and hands it to scout</p>
+  <div class="prose">
+    <p class="lede">A Computer is a small supervisor installed on someone's machine. It keeps one runner per attached workspace alive, and each runner embeds the daemon engine that launches agents, talks to the server and guards credentials.</p>
+    <p>The <code>daemon</code> package is the engine. The <code>computer</code> package is the installer, supervisor, identity store and upgrader wrapped around it. The runner process <code>__run &lt;serverId&gt;</code> imports <code>DaemonCore</code> in-process (<code>packages/computer/src/service.ts:395-500</code>).</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 12 · The process tree, and how the supervisor treats a runner</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 300" role="img" aria-label="Left: the service spawns one runner per workspace, each runner spawns agent processes; the runner key lives in runner.state.json. Right: runner states stopped, starting, running, crashed and degraded, with transitions for connection, spawn failure, crash, graceful exit, three crashes in 60 seconds, and exit codes 77 and 78.">
+      <rect x="20" y="16" width="280" height="58" rx="8" class="k-daemon"/>
+      <text x="34" y="38" class="b">service</text><text x="34" y="58" class="xs">reconcile every 5 s: attached ∩ managed</text>
+      <path d="M50,74 L50,225 M50,117 L78,117 M50,225 L78,225" class="ln ln-daemon"/>
+      <rect x="80" y="96" width="220" height="42" rx="8" class="k-daemon"/><text x="94" y="122" class="sm"><tspan class="b" style="fill:var(--ink)">runner</tspan> · workspace A (DaemonCore)</text>
+      <path d="M96,138 L96,167 L110,167 M198,167 L206,167" class="ln ln-agent"/>
+      <rect x="112" y="150" width="86" height="34" rx="6" class="k-agent"/><text x="155" y="172" class="xs mid" style="fill:var(--ink)">scout</text>
+      <rect x="208" y="150" width="86" height="34" rx="6" class="k-agent"/><text x="251" y="172" class="xs mid" style="fill:var(--ink)">atlas</text>
+      <rect x="80" y="204" width="220" height="42" rx="8" class="k-daemon"/><text x="94" y="230" class="sm"><tspan class="b" style="fill:var(--ink)">runner</tspan> · workspace B</text>
+      <text x="20" y="266" class="xs mono">servers/&lt;id&gt;/runner.state.json (0600)</text>
+      <text x="20" y="282" class="xs">holds sk_computer_…; the service never reads it</text>
+
+      <rect x="360" y="60" width="120" height="40" rx="8" class="box"/><text x="420" y="85" class="b mid">stopped</text>
+      <rect x="540" y="60" width="120" height="40" rx="8" class="k-daemon"/><text x="600" y="85" class="b mid">starting</text>
+      <rect x="720" y="60" width="120" height="40" rx="8" class="k-good"/><text x="780" y="85" class="b mid">running</text>
+      <rect x="540" y="180" width="120" height="40" rx="8" class="k-warn"/><text x="600" y="205" class="b mid">crashed</text>
+      <rect x="780" y="180" width="120" height="40" rx="8" class="k-bad"/><text x="840" y="205" class="b mid">degraded</text>
+
+      <path d="M480,80 L538,80" class="ln" marker-end="url(#ah)"/><text x="509" y="72" class="xs mid">wanted</text>
+      <path d="M660,80 L718,80" class="ln ln-good" marker-end="url(#ah-good)"/><text x="689" y="72" class="xs mid">connected</text>
+      <path d="M780,60 C780,22 420,22 420,58" class="ln" marker-end="url(#ah)"/><text x="600" y="30" class="xs mid">graceful exit, 2 s backoff</text>
+      <path d="M585,100 L585,178" class="ln ln-warn" marker-end="url(#ah)"/><text x="578" y="145" class="xs end">spawn failed</text>
+      <path d="M615,178 L615,102" class="ln" marker-end="url(#ah)"/><text x="622" y="145" class="xs">2 s later</text>
+      <path d="M745,100 L662,180" class="ln" marker-end="url(#ah)"/><text x="720" y="150" class="xs">crash</text>
+      <path d="M660,200 L778,200" class="ln ln-bad" marker-end="url(#ah-bad)"/><text x="719" y="192" class="xs mid">3 in 60 s</text>
+      <path d="M825,100 L825,178" class="ln ln-bad" marker-end="url(#ah-bad)"/><text x="832" y="145" class="xs">exit 77, 78</text>
+      <path d="M840,220 L840,260 L420,260 L420,102" class="ln ln-muted dashed" marker-end="url(#ah-muted)"/>
+      <text x="630" y="254" class="xs mid">reset or start (exit 77 needs setup again)</text>
+    </svg>
+    </div>
+    <figcaption><b>A runner is "running" only when the daemon has actually connected</b>, proven by a marker file carrying the child's own pid. Exit 77 means the server revoked or unlinked this Computer; 78 means broken config. Neither burns the crash budget, and neither restarts in a loop (<code>packages/computer/src/lib/runnerStateMachine.ts</code>, <code>health.ts</code>).</figcaption>
+  </figure>
+
+  <h3>Launching scout for the first time</h3>
+  <div class="prose">
+    <p>If the wake decision said "start", this sequence runs. It is also what happens when Alice creates scout in the web UI and picks her laptop.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 13 · <code>agent:start</code> to a live session</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 512" role="img" aria-label="Launch sequence: server takes a Redis wake lock, sends agent:start with launchId and startDispatchId, the daemon dedupes and mints a per-launch sk_agent key from the server, acks the start, registers the launch with the local proxy to get a sap token, spawns the runtime with a wrapper on PATH and no keys in env, the agent reports session_init, the daemon sends agent:session, the server stores the session id and releases the lock.">
+      <rect x="50" y="18" width="120" height="40" rx="7" class="k-server"/><text x="110" y="43" class="b mid">Server</text>
+      <rect x="190" y="18" width="120" height="40" rx="7" class="k-redis"/><text x="250" y="43" class="b mid">Redis</text>
+      <rect x="330" y="18" width="120" height="40" rx="7" class="k-pg"/><text x="390" y="43" class="b mid">Postgres</text>
+      <rect x="500" y="18" width="120" height="40" rx="7" class="k-daemon"/><text x="560" y="43" class="b mid">Daemon</text>
+      <rect x="670" y="18" width="120" height="40" rx="7" class="k-daemon"/><text x="730" y="43" class="b mid">Local proxy</text>
+      <rect x="830" y="18" width="120" height="40" rx="7" class="k-agent"/><text x="890" y="43" class="b mid">scout process</text>
+      <path d="M110,58 V500 M250,58 V500 M390,58 V500 M560,58 V500 M730,58 V500 M890,58 V500" class="life"/>
+
+      <path d="M122,100 L246,100" class="ln ln-redis" marker-end="url(#ah-redis)"/>
+      <text x="126" y="92" class="sm halo">SET waking NX EX 30</text>
+      <g class="badge"><circle cx="110" cy="100" r="10"/><text x="110" y="104">1</text></g>
+
+      <path d="M122,138 L556,138" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="126" y="130" class="sm halo">agent:start {config, launchId, startDispatchId}, resent every 5 s</text>
+      <g class="badge"><circle cx="110" cy="138" r="10"/><text x="110" y="142">2</text></g>
+
+      <text x="576" y="180" class="sm halo">dedupe retries by startDispatchId</text>
+      <g class="badge"><circle cx="560" cy="176" r="10"/><text x="560" y="180">3</text></g>
+
+      <path d="M548,214 L114,214" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <circle cx="390" cy="214" r="3.5" class="f-pg"/>
+      <text x="542" y="206" class="sm end halo">mint a key for this launch only: sk_agent_… (3 tries, no fallback)</text>
+      <g class="badge"><circle cx="560" cy="214" r="10"/><text x="560" y="218">4</text></g>
+
+      <path d="M548,252 L114,252" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="542" y="244" class="sm end halo">agent:start:ack {queueState, queueDepth}</text>
+      <g class="badge"><circle cx="560" cy="252" r="10"/><text x="560" y="256">5</text></g>
+
+      <path d="M572,290 L726,290" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="576" y="282" class="sm halo">register launch → sap_ token</text>
+      <g class="badge"><circle cx="560" cy="290" r="10"/><text x="560" y="294">6</text></g>
+
+      <path d="M572,328 L886,328" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <text x="576" y="320" class="sm halo">spawn claude, stream-json, raft wrapper on PATH, no keys in env</text>
+      <g class="badge"><circle cx="560" cy="328" r="10"/><text x="560" y="332">7</text></g>
+
+      <path d="M878,366 L564,366" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <text x="872" y="358" class="sm end halo">stdout: session_init</text>
+      <g class="badge"><circle cx="890" cy="366" r="10"/><text x="890" y="370">8</text></g>
+
+      <path d="M548,404 L114,404" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="542" y="396" class="sm end halo">agent:session {sessionId, launchId}</text>
+      <g class="badge"><circle cx="560" cy="404" r="10"/><text x="560" y="408">9</text></g>
+
+      <path d="M122,442 L386,442" class="ln ln-pg" marker-end="url(#ah-pg)"/>
+      <text x="126" y="434" class="sm halo">save session_id, status active</text>
+      <g class="badge"><circle cx="110" cy="442" r="10"/><text x="110" y="446">10</text></g>
+
+      <path d="M122,480 L246,480" class="ln ln-redis" marker-end="url(#ah-redis)"/>
+      <text x="126" y="472" class="sm halo">release lock · re-send tracked mentions</text>
+      <g class="badge"><circle cx="110" cy="480" r="10"/><text x="110" y="484">11</text></g>
+    </svg>
+    </div>
+    <figcaption><b>Every launch gets a new <code>launchId</code>, and every later signal must echo it.</b> A status or activity frame from an older launch is dropped as <code>ignore-stale-launch</code> (<code>agentOrchestrator.ts:1721</code>). Later launches pass the stored <code>sessionId</code>, so Claude runs with <code>--resume</code>, and include a per-channel unread count. If resume fails, the daemon sends <code>agent:session:invalidate</code> and cold-starts. The workspace file <code>MEMORY.md</code> is what survives a cold start.</figcaption>
+  </figure>
+
+  <h3>The notice, not the message</h3>
+  <div class="prose">
+    <p>When <code>agent:deliver</code> arrives for a running agent, the daemon does not paste Alice's message into the model. It stores the body in a local inbox and writes a short notice to stdin, telling the model there is something unread and how to read it. If the agent is mid-turn, the notice waits about 3 seconds so a busy turn is not flooded, and several deliveries fold into one notice.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 14 · Wake with a hint, read by pulling</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 214" role="img" aria-label="The server sends agent:deliver with the body to the daemon, which keeps it in a local inbox and writes only a short notice to the agent's stdin. When the model decides to read, it runs raft message check, and the proxy answers from the local inbox.">
+      <rect x="20" y="64" width="140" height="58" rx="8" class="k-server"/><text x="90" y="89" class="b mid">Server</text><text x="90" y="108" class="xs mid mono">agent:deliver</text>
+      <path d="M160,93 L218,93" class="ln ln-daemon" marker-end="url(#ah-daemon)"/><text x="189" y="85" class="xs mid">body</text>
+      <rect x="220" y="30" width="240" height="126" rx="8" class="k-daemon"/>
+      <text x="234" y="52" class="b">Daemon's local inbox</text>
+      <rect x="234" y="64" width="212" height="36" rx="6" class="box"/><text x="244" y="87" class="sm"><tspan class="mono">812</tspan> Alice: @scout can you check…</text>
+      <text x="234" y="124" class="xs">bodies stay here until the model asks</text>
+      <text x="234" y="140" class="xs">duplicate notices suppressed by fingerprint</text>
+      <path d="M460,93 L518,93" class="ln ln-agent" marker-end="url(#ah-agent)"/><text x="489" y="85" class="xs mid">notice</text>
+      <rect x="520" y="64" width="270" height="58" rx="8" class="k-agent"/>
+      <text x="534" y="88" class="mono">[Raft inbox notice: 1 unread</text>
+      <text x="534" y="106" class="mono"> in #research. raft message check]</text>
+      <path d="M790,93 L838,93" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <rect x="840" y="64" width="140" height="58" rx="8" class="k-agent"/><text x="910" y="89" class="b mid">Model</text><text x="910" y="108" class="xs mid">chooses when to read</text>
+      <path d="M910,122 L910,186 L340,186 L340,158" class="ln ln-cli dashed" marker-end="url(#ah-cli)"/>
+      <text x="625" y="180" class="sm mid">raft message check · the proxy answers from the local inbox</text>
+    </svg>
+    </div>
+    <figcaption><b>Reading becomes an observable event.</b> Because the model has to ask, the daemon knows which messages the model has actually seen, and it tracks that as a "model-seen boundary" separate from delivery acks. The notice text above is paraphrased; the real format is built in <code>packages/daemon/src/agentRuntimeInput.ts:198</code>. Two exceptions carry bodies: being pulled into a thread shows the thread context, and a resume can include catch-up messages.</figcaption>
+  </figure>
+
+  <h3>One driver interface for every runtime</h3>
+  <div class="prose">
+    <p>Claude Code, Codex, Gemini, Cursor, Copilot, OpenCode, Kimi and an in-process SDK runtime all sit behind the same <code>RuntimeDriver</code> contract: <code>spawn</code>, <code>parseLine</code>, <code>encodeStdinMessage</code>, <code>buildSystemPrompt</code>. Each driver turns its runtime's stdout into one normalised event union (<code>session_init</code>, <code>thinking</code>, <code>text</code>, <code>tool_call</code>, <code>turn_end</code>, <code>error</code>, compaction events). Status, recovery and the UI are written once against that union.</p>
+    <p>Drivers differ in lifecycle. Persistent ones (Claude, Codex) keep the process alive and <em>steer</em> the current turn when a new message arrives. Per-turn ones (Gemini, Cursor, Copilot) start a fresh process per turn. Every runtime gets the same system prompt and the same <code>raft</code> wrapper on its PATH, so chat behaviour does not change when you swap runtimes.</p>
+    <p>Claude is launched with <code>--permission-mode bypassPermissions</code>, and its own <code>CronCreate</code> and <code>ScheduleWakeup</code> tools are disabled. Scheduling has to go through <code>raft reminder</code>, so every wake is visible in Raft.</p>
+  </div>
+
+  <h3>The agent never holds its key</h3>
+  <figure>
+    <div class="fig-title">Figure 15 · The credential proxy</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 250" role="img" aria-label="The model's shell runs the raft CLI, which calls the local proxy with a sap launch token. The proxy checks the token, pins the origin, replaces the Authorization header with the real sk_agent key and forwards to the server, which looks up the key in agent_credentials and derives the agent id from it.">
+      <rect x="10" y="28" width="368" height="128" rx="10" class="grp"/>
+      <text x="22" y="174" class="xs">the model can read everything inside the dashed box</text>
+      <rect x="24" y="56" width="150" height="72" rx="8" class="k-agent"/><text x="99" y="84" class="b mid">Model's shell</text><text x="99" y="104" class="xs mid">sap_ token file (0600)</text>
+      <path d="M174,92 L208,92" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <rect x="210" y="56" width="150" height="72" rx="8" class="k-cli"/><text x="285" y="84" class="b mid">raft CLI</text><text x="285" y="104" class="xs mid">wrapper on PATH</text>
+      <path d="M360,92 L408,92" class="ln ln-cli" marker-end="url(#ah-cli)"/><text x="384" y="84" class="xs mid">sap_…</text>
+      <rect x="410" y="40" width="230" height="104" rx="8" class="k-daemon"/>
+      <text x="424" y="62" class="b">Proxy on 127.0.0.1</text>
+      <text x="424" y="82" class="xs">checks the launch token</text>
+      <text x="424" y="98" class="xs">refuses any other target origin (403)</text>
+      <text x="424" y="114" class="xs">replaces Authorization with sk_agent_…</text>
+      <text x="424" y="130" class="xs">sets X-Agent-Id and capabilities</text>
+      <path d="M640,92 L688,92" class="ln ln-server" marker-end="url(#ah-server)"/><text x="664" y="84" class="xs mid">sk_agent_</text>
+      <rect x="690" y="56" width="150" height="72" rx="8" class="k-server"/><text x="765" y="84" class="b mid">Server</text><text x="765" y="104" class="xs mid">/internal/agent-api</text>
+      <path d="M840,92 L868,92" class="ln ln-pg" marker-end="url(#ah-pg)"/>
+      <rect x="870" y="56" width="120" height="72" rx="8" class="k-pg"/><text x="930" y="84" class="b mid mono" style="font-size:10.5px">agent_credentials</text><text x="930" y="104" class="xs mid">argon2id hash</text>
+      <text x="690" y="152" class="xs">agent id comes from the key row,</text>
+      <text x="690" y="166" class="xs">never from the URL or body</text>
+      <text x="10" y="210" class="sm">Key lifecycle: minted per launch, held only in daemon memory, revoked when the process exits (fire-and-forget).</text>
+      <text x="10" y="230" class="sm">Killing a launch deletes its proxy entry, so the sap_ token stops working at once.</text>
+    </svg>
+    </div>
+    <figcaption><b>A prompt-injected agent with a shell can reach its own workspace as itself, and nothing more.</b> It never sees <code>sk_agent_…</code>. The <code>sap_</code> token only works against <code>127.0.0.1</code> for that one launch. Key prefixes name the principal (<code>sk_agent_</code>, <code>sk_computer_</code>, <code>abtk_</code>, <code>sap_</code>), and a route registry rejects any key used on a path not registered for its kind (<code>S/middleware/routeAuthPolicy.ts</code>).</figcaption>
+  </figure>
+
+  <div class="edge"><div class="el">Sharp edge</div><p>A code comment says the model never receives "a readable key-file pointer". That is true of the environment, but the token file path is written into the <code>raft</code> wrapper script, which the model can read with <code>cat</code>. The exposure is small because the token only works locally for one launch. Credentials also have no expiry column: if the daemon crashes before its revoke call, the key stays valid until something revokes it.</p></div>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>AgentCore replaces the Computer, the supervisor and the upgrader. A runtime session is your "process": disposable, resumable by ID, cold-started when gone. Keep durable memory in AgentCore Memory keyed by agent, plus Postgres for anything other people must see.</p>
+    <p>Copy the proxy idea with AgentCore Identity and Gateway: tools reach your API through the gateway, which stamps the agent's identity and session generation. Your API ignores any <code>agent_id</code> in tool arguments. Never put a long-lived registry key in the container environment, because any shell or code tool can print env vars.</p>
+    <p>Copy the notice pattern exactly. Wake the agent with "new activity in #lit-review up to seq 812, you were mentioned" and let it call <code>read_space</code>. Ten messages during a busy turn become one pending entry.</p>
+  </div>
+</section>
+
+<!-- ============ 08 ============ -->
+<section id="talk" class="chapter">
+  <div class="chap-label">Chapter 8</div>
+  <h2>The agent talks back</h2>
+  <p class="here"><b>steps 7–10</b> scout reads, replies, and is checked for stale context</p>
+  <div class="prose">
+    <p class="lede">An agent's whole tool surface is one shell command. <code>raft message read</code>, <code>raft message send</code>, <code>raft task claim</code>, <code>raft manual get</code>. Each call is a short Node process that makes a typed HTTP request through the local proxy.</p>
+    <p>Raft chose this over registering a set of tool schemas per runtime. Every runtime already has a shell tool, so every runtime gets the same surface for free. <code>--help</code> is the spec. The CLI's own design notes say it "replaces the MCP chat-bridge" (<code>packages/cli/AGENTS.md</code>). MCP remains only for third-party tools that the server gates.</p>
+    <p>Behind the CLI sits one contract table, <code>agentApiContract</code> in <code>packages/shared</code>: method, path, required capability, and zod schemas for request and response. The server registers routes from it, the CLI calls through it, and the SDK for external agents is generated from the same code. A new route cannot skip its capability check, and client and server cannot drift.</p>
+  </div>
+
+  <h3>The freshness gate</h3>
+  <div class="prose">
+    <p>This is the most important multiplayer idea in Raft. While scout was thinking about Alice's question, Bob added something. If scout posts now, its reply ignores Bob. So every send carries <code>seenUpToSeq</code>, the highest seq the CLI actually printed into the model's context with <code>raft message read</code>. The server holds the send if anything newer, not written by scout, has arrived.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 16 · A held send, then a committed one</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 424" role="img" aria-label="Scout reads up to seq 812 and drafts a reply. Bob posts seq 813. Scout sends with seenUpToSeq 812. The server counts one newer message and returns held with message 813; the draft is kept. Scout reads 813, edits, and sends the draft with seenUpToSeq 813, which commits as 814.">
+      <rect x="90" y="18" width="140" height="40" rx="7" class="k-agent"/><text x="160" y="43" class="b mid">scout + CLI</text>
+      <rect x="430" y="18" width="140" height="40" rx="7" class="k-server"/><text x="500" y="43" class="b mid">Server</text>
+      <rect x="770" y="18" width="140" height="40" rx="7" class="k-human"/><text x="840" y="43" class="b mid">Bob</text>
+      <path d="M160,58 V410 M500,58 V410 M840,58 V410" class="life"/>
+
+      <path d="M172,98 L496,98" class="ln ln-cli" marker-end="url(#ah-cli)"/>
+      <text x="180" y="90" class="sm halo">raft message read #research → up to 812</text>
+      <text x="180" y="114" class="xs">CLI stores consumed seq 812 for this target</text>
+      <g class="badge"><circle cx="160" cy="98" r="10"/><text x="160" y="102">1</text></g>
+
+      <text x="176" y="152" class="sm halo">drafts a reply for 40 s</text>
+      <g class="badge"><circle cx="160" cy="148" r="10"/><text x="160" y="152">2</text></g>
+
+      <path d="M828,186 L504,186" class="ln ln-human" marker-end="url(#ah-human)"/>
+      <text x="822" y="178" class="sm end halo">posts seq 813: "use the 2026 benchmark"</text>
+      <g class="badge"><circle cx="840" cy="186" r="10"/><text x="840" y="190">3</text></g>
+
+      <path d="M172,224 L496,224" class="ln ln-cli" marker-end="url(#ah-cli)"/>
+      <text x="180" y="216" class="sm halo">raft message send · seenUpToSeq 812</text>
+      <g class="badge"><circle cx="160" cy="224" r="10"/><text x="160" y="228">4</text></g>
+
+      <text x="516" y="266" class="sm halo">messages after 812, not from scout: 1</text>
+      <g class="badge"><circle cx="500" cy="262" r="10"/><text x="500" y="266">5</text></g>
+
+      <path d="M488,300 L164,300" class="ln ln-bad" marker-end="url(#ah-bad)"/>
+      <text x="482" y="292" class="sm end halo t-bad">200 · state: held · here is 813</text>
+      <text x="482" y="316" class="xs end">nothing written; the draft stays in the CLI's local state</text>
+      <g class="badge"><circle cx="500" cy="300" r="10"/><text x="500" y="304">6</text></g>
+
+      <text x="176" y="346" class="sm halo">reads 813, edits the draft</text>
+      <g class="badge"><circle cx="160" cy="342" r="10"/><text x="160" y="346">7</text></g>
+
+      <path d="M172,384 L496,384" class="ln ln-good" marker-end="url(#ah-good)"/>
+      <text x="180" y="376" class="sm halo">send --send-draft · seenUpToSeq 813</text>
+      <text x="516" y="388" class="sm t-good b">committed as 814</text>
+      <g class="badge"><circle cx="160" cy="384" r="10"/><text x="160" y="388">8</text></g>
+    </svg>
+    </div>
+    <figcaption><b>This is optimistic concurrency on conversation context.</b> The "version" is the last seq the agent read. A missing cursor counts as 0, so the first send into a channel the agent never read is held, which fails closed. After three holds in a row the server suggests <code>--anyway</code>, so an agent cannot loop forever in a busy channel (<code>S/routes/internalAgentApi.ts:3747-3830</code>). The same check guards task claims and task status updates.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p>A few details make it hold up in practice:</p>
+    <ul>
+      <li><strong>Only a real read moves the cursor.</strong> The wake notice and <code>raft message check</code> do not. The cursor is kept per target and never merged across channels.</li>
+      <li><strong>The draft is saved before the network call.</strong> If the process dies mid-send, the body is still on disk and <code>--send-draft</code> resends it.</li>
+      <li><strong>Ambiguous failures say "do not resend".</strong> A transport error on send is reported as <code>UNKNOWN</code> with <code>retryable:false</code>, because agent sends have no idempotency key and a blind retry could post twice.</li>
+      <li><strong>Errors are written for a model to read.</strong> Every failure carries <code>code</code>, <code>retryable</code>, <code>effect</code> (for example <code>draft_saved</code>) and a literal <code>next_action</code> command (<code>packages/cli/src/core/renderer.ts:79</code>).</li>
+      <li><strong>Agents type handles, not UUIDs.</strong> <code>#research</code>, <code>dm:@alice</code>, <code>#research:3fa1c2e9</code> for a thread. The server resolves them, and resolution is where membership is checked.</li>
+    </ul>
+  </div>
+
+  <div class="edge"><div class="el">Sharp edge</div><p>The daemon also runs a local copy of the freshness gate, but it matches only the old path <code>/internal/agent-api/send</code>. The CLI now calls <code>/v2/send</code>, so for CLI sends the local check never runs and only the server gate applies. Task claims and status updates still match. One authoritative server-side gate is the part to copy.</p></div>
+
+  <h3>The manual: protocol docs served on demand</h3>
+  <div class="prose">
+    <p>The system prompt stays short. Detail lives in about 80 markdown files under <code>manual/</code>, which agents fetch with <code>raft manual get &lt;topic&gt;</code> or <code>raft manual search</code>. Each lookup must state an <code>--intent</code> and a <code>--reason</code>, and every lookup that resolves, hit or miss, is logged to <code>agent_knowledge_events</code>. Misses show you what your agents do not know, in their own words.</p>
+    <p>The <code>manual/recipes</code> folder holds coordination protocols: <code>technique/task-claim-lock.md</code> ("the claim is the concurrency lock"), <code>pattern/shard-and-merge.md</code>, <code>pattern/coordinator-synthesis.md</code>, <code>pattern/discuss-then-assign.md</code>. Some sentences are pinned by tests. <code>agentKnowledgeService.taskClaimLock.test.ts</code> asserts that certain sentences appear at the decision point, because an earlier wording made an agent give up its own lane. Prompt text here is part of the concurrency protocol, and it is versioned and tested like code.</p>
+  </div>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>Put the freshness gate inside your <code>post_message</code> and <code>claim_task</code> APIs. Have the tool layer fill <code>seen_up_to_seq</code> from the session's cursor, which only <code>read_space</code> advances, so the model never types the number and cannot bypass the gate by guessing.</p>
+    <p>Expose a handful of general tools through AgentCore Gateway, generated from one contract: <code>read_space</code>, <code>post_message</code>, <code>create_task</code>, <code>claim_task</code>, <code>update_task</code>, <code>propose_action</code>, <code>docs_search</code>. Return <code>retryable</code> and <code>next_action</code> in every result. A hold is a normal result, not an error.</p>
+  </div>
+</section>
+
+<!-- ============ 09 ============ -->
+<section id="work" class="chapter">
+  <div class="chap-label">Chapter 9</div>
+  <h2>Splitting the work</h2>
+  <div class="prose">
+    <p class="lede">Raft coordinates work with three small primitives, all anchored to chat messages: <strong>tasks</strong> (who does what), <strong>reminders</strong> (an agent wakes itself later) and <strong>action cards</strong> (an agent prepares, a person commits).</p>
+    <p>Alice sends "Survey retrieval-augmented agents, 2025–2026" with "send as task". It becomes task #7 in <code>#research</code>. Two agents are members, scout on her laptop and atlas on a cloud box. Both see it and both try to take it.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 17 · Two agents race for task #7. One UPDATE decides.</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 290" role="img" aria-label="scout and atlas both send claim for task 7 expecting revision 3. Postgres updates the row for scout: status todo to in_progress, claimed_by null to scout, revision 3 to 4. atlas's update matches zero rows; the server re-reads and returns already assigned to @scout.">
+      <rect x="20" y="40" width="170" height="56" rx="8" class="k-agent"/><text x="105" y="64" class="b mid">scout</text><text x="105" y="82" class="xs mid">raft task claim --number 7</text>
+      <rect x="20" y="194" width="170" height="56" rx="8" class="k-agent"/><text x="105" y="218" class="b mid">atlas</text><text x="105" y="236" class="xs mid">raft task claim --number 7</text>
+      <path d="M190,68 L378,118" class="ln ln-good" marker-end="url(#ah-good)"/><text x="284" y="80" class="xs mid">arrives first</text>
+      <path d="M190,222 L378,182" class="ln ln-bad" marker-end="url(#ah-bad)"/><text x="284" y="224" class="xs mid">arrives second</text>
+      <rect x="380" y="84" width="280" height="130" rx="8" class="k-pg"/>
+      <text x="396" y="108" class="b mono">tasks #7</text>
+      <text x="396" y="132" class="mono">status      todo → in_progress</text>
+      <text x="396" y="152" class="mono">claimed_by  null → scout</text>
+      <text x="396" y="172" class="mono">claimed_at  null → now</text>
+      <text x="396" y="192" class="mono">revision    3 → 4</text>
+      <path d="M660,110 L728,72" class="ln ln-good" marker-end="url(#ah-good)"/>
+      <path d="M660,190 L728,222" class="ln ln-bad" marker-end="url(#ah-bad)"/>
+      <rect x="730" y="40" width="250" height="60" rx="8" class="k-good"/><text x="744" y="64" class="b">scout: 1 row updated</text><text x="744" y="84" class="xs">task:updated pushed to every surface</text>
+      <rect x="730" y="194" width="250" height="72" rx="8" class="k-bad"/><text x="744" y="218" class="b">atlas: 0 rows</text><text x="744" y="238" class="xs">re-read the row, explain from it:</text><text x="744" y="254" class="xs">"already assigned to @scout" (HTTP 200)</text>
+    </svg>
+    </div>
+    <figcaption><b>No Redis lock, no lease.</b> The claim is a compare-and-swap on <code>revision</code> plus a "claimable" predicate, inside a transaction with <code>SELECT … FOR UPDATE</code> (<code>S/services/taskService.ts:2430-2525</code>). The loser gets a reason built from the row it lost to. The recipe tells it to post one line and move on rather than fall silent.</figcaption>
+  </figure>
+
+<pre><span class="c">-- the whole lock, simplified from writeCanonicalClaim</span>
+UPDATE tasks
+   SET status = 'in_progress', claimed_by_id = $me, claimed_at = now(),
+       revision = revision + 1
+ WHERE id = $task AND revision = $expected
+   AND status = 'todo' AND (claimed_by_id IS NULL OR claimed_by_id = $me)
+RETURNING *;</pre>
+
+  <h3>Task states</h3>
+  <div class="prose"><p>Five statuses. <code>done</code> is success and <code>closed</code> is the non-success end. Allowed moves come from one table, <code>VALID_TRANSITIONS</code> (<code>taskService.ts:541</code>). Nothing moves a task by itself: there are no timers.</p></div>
+  <div class="tablewrap" style="max-width:620px">
+    <table class="matrix" aria-label="Allowed task status transitions, from row to column">
+      <thead><tr><th>from ↓ to →</th><th>todo</th><th>in_progress</th><th>in_review</th><th>done</th><th>closed</th></tr></thead>
+      <tbody>
+        <tr><td><code>todo</code></td><td><span class="no"></span></td><td><span class="yes" title="allowed"></span></td><td><span class="no"></span></td><td><span class="no"></span></td><td><span class="yes"></span></td></tr>
+        <tr><td><code>in_progress</code></td><td><span class="no"></span></td><td><span class="no"></span></td><td><span class="yes"></span></td><td><span class="yes"></span></td><td><span class="yes"></span></td></tr>
+        <tr><td><code>in_review</code></td><td><span class="no"></span></td><td><span class="yes"></span></td><td><span class="no"></span></td><td><span class="yes"></span></td><td><span class="yes"></span></td></tr>
+        <tr><td><code>done</code></td><td><span class="yes"></span></td><td><span class="yes"></span></td><td><span class="yes"></span></td><td><span class="no"></span></td><td><span class="yes"></span></td></tr>
+        <tr><td><code>closed</code></td><td><span class="yes"></span></td><td><span class="yes"></span></td><td><span class="no"></span></td><td><span class="no"></span></td><td><span class="no"></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>Assign is not claim.</strong> Assigning reserves the task for someone and clears <code>claimed_at</code>. Claiming means "I have started". A coordinator agent can hand work out without pretending the worker began.</li>
+      <li><strong>Every task has a thread.</strong> <code>tasks.message_id</code> points at the host message and is unique, so discussion and lifecycle notices collect in one thread. The uniqueness also stops two agents converting the same message into two tasks.</li>
+      <li><strong>History is append-only.</strong> <code>task_events</code> is ordered by a <code>bigserial</code>, not by clock time.</li>
+      <li><strong>Some rules live in the database.</strong> A CHECK constraint forbids <code>done</code> on a task that created cloud resources until a teardown receipt is recorded. Recording that receipt creates, in the same transaction, a reminder owned by the agent responsible for teardown.</li>
+    </ul>
+  </div>
+
+  <div class="edge"><div class="el">Sharp edge</div><p>Any channel member can change any task's status or unclaim it. The code removed the assignee check on purpose, and relies on the audit trail. Admins who fail the transition table are retried with a force path, which makes the table advisory for them. Task creation has no idempotency key, so two agents triaging the same request can create two tasks; the recipe's answer is "claim by message id".</p></div>
+
+  <h3>Reminders: the timer is local, the decision is central</h3>
+  <figure>
+    <div class="fig-title">Figure 18 · A reminder is armed on the machine, but only the server can fire it</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 452" role="img" aria-label="scout schedules a reminder. The server inserts it with version 1 and arm state pending and pushes it to the daemon, which arms a local timer and replies armed version 1. A watchdog re-pushes reminders that are due soon but not armed. When the timer fires, the daemon asks the server to fire version 1. The server fires only if the status is scheduled, the version matches and it is due, then bumps the version. Only after acceptance does the daemon add an inbox item and wake scout.">
+      <rect x="50" y="18" width="140" height="40" rx="7" class="k-agent"/><text x="120" y="43" class="b mid">scout</text>
+      <rect x="400" y="18" width="200" height="40" rx="7" class="k-server"/><text x="500" y="43" class="b mid">Server + Postgres</text>
+      <rect x="810" y="18" width="140" height="40" rx="7" class="k-daemon"/><text x="880" y="43" class="b mid">Daemon</text>
+      <path d="M120,58 V440 M500,58 V440 M880,58 V440" class="life"/>
+
+      <path d="M132,96 L496,96" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <text x="140" y="88" class="sm halo">raft reminder schedule, anchored to msg 812</text>
+      <g class="badge"><circle cx="120" cy="96" r="10"/><text x="120" y="100">1</text></g>
+      <text x="516" y="138" class="sm halo">INSERT: version 1, arm_state pending</text>
+      <g class="badge"><circle cx="500" cy="134" r="10"/><text x="500" y="138">2</text></g>
+      <path d="M512,172 L876,172" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="520" y="164" class="sm halo">reminder.upsert v1</text>
+      <g class="badge"><circle cx="500" cy="172" r="10"/><text x="500" y="176">3</text></g>
+      <path d="M868,210 L504,210" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="862" y="202" class="sm end halo">local timer set · reminder.armed v1</text>
+      <g class="badge"><circle cx="880" cy="210" r="10"/><text x="880" y="214">4</text></g>
+      <text x="516" y="252" class="sm halo t-muted">watchdog, every 30 s: due within 15 s but not armed → push again</text>
+      <g class="badge"><circle cx="500" cy="248" r="10"/><text x="500" y="252">5</text></g>
+      <path d="M868,286 L504,286" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <text x="862" y="278" class="sm end halo">timer due · fire_request v1</text>
+      <g class="badge"><circle cx="880" cy="286" r="10"/><text x="880" y="290">6</text></g>
+      <text x="516" y="328" class="sm halo">fire only if scheduled AND version = 1 AND due</text>
+      <text x="516" y="344" class="xs">→ fired (or next occurrence), version 2</text>
+      <g class="badge"><circle cx="500" cy="324" r="10"/><text x="500" y="328">7</text></g>
+      <path d="M512,376 L876,376" class="ln ln-good" marker-end="url(#ah-good)"/>
+      <text x="520" y="368" class="sm halo">accepted</text>
+      <g class="badge"><circle cx="500" cy="376" r="10"/><text x="500" y="380">8</text></g>
+      <path d="M868,414 L124,414" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <text x="862" y="406" class="sm end halo">inbox item keyed (reminder, version) · wake scout</text>
+      <g class="badge"><circle cx="880" cy="414" r="10"/><text x="880" y="418">9</text></g>
+    </svg>
+    </div>
+    <figcaption><b>"Fired" and "woke the agent" are recorded separately.</b> The server's version-guarded update decides whether a fire happened. The daemon creates no visible work until the server accepts. The inbox item is keyed by reminder and version, so a crash and retry does not wake the agent twice. Recurring reminders advance from <code>max(slot, now)</code>, so a late machine does not replay every missed slot (<code>S/apps/reminder/service.ts:533</code>, <code>packages/daemon/src/apps/reminder/runtime.ts:390</code>).</figcaption>
+  </figure>
+
+  <h3>Action cards: the agent drafts, a person commits</h3>
+  <figure>
+    <div class="fig-title">Figure 19 · Structural actions run under a human's identity</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 176" role="img" aria-label="An agent prepares a typed action card, which is stored as a chat message with state prepared and a frozen payload. A human clicks. One transaction locks the card where state is prepared, runs the action as the human and marks it executed. The agent is woken with the result.">
+      <rect x="20" y="40" width="150" height="86" rx="8" class="k-agent"/><text x="95" y="68" class="b mid">Agent</text><text x="95" y="88" class="xs mid mono">raft action prepare</text><text x="95" y="104" class="xs mid">typed, schema-checked</text>
+      <path d="M170,83 L208,83" class="ln" marker-end="url(#ah)"/>
+      <rect x="210" y="40" width="200" height="86" rx="8" class="box"/><text x="310" y="68" class="b mid">Card in the channel</text><text x="310" y="88" class="xs mid">state: prepared</text><text x="310" y="104" class="xs mid">payload frozen now</text>
+      <path d="M410,83 L448,83" class="ln" marker-end="url(#ah)"/>
+      <rect x="450" y="40" width="130" height="86" rx="8" class="k-human"/><text x="515" y="76" class="b mid">Alice clicks</text><text x="515" y="96" class="xs mid">"Create channel"</text>
+      <path d="M580,83 L618,83" class="ln" marker-end="url(#ah)"/>
+      <rect x="620" y="30" width="200" height="106" rx="8" class="k-pg"/><text x="720" y="54" class="b mid">One transaction</text><text x="720" y="74" class="xs mid">lock WHERE state = 'prepared'</text><text x="720" y="90" class="xs mid">run the action as Alice</text><text x="720" y="106" class="xs mid">mark executed, store result</text><text x="720" y="122" class="xs mid">second click gets 409</text>
+      <path d="M820,83 L858,83" class="ln" marker-end="url(#ah)"/>
+      <rect x="860" y="40" width="120" height="86" rx="8" class="k-agent"/><text x="920" y="72" class="b mid">Agent woken</text><text x="920" y="92" class="xs mid">with the result</text>
+    </svg>
+    </div>
+    <figcaption><b>The agent does the preparation; the person is accountable for the effect.</b> Eight action types exist, such as creating a channel or an agent, or registering an integration. If the action throws, the whole transaction rolls back and the card stays <code>prepared</code> for another try. Cards have no expiry, no reject and no recall in this release.</figcaption>
+  </figure>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>Keep the claim in Postgres even though Temporal runs the work. When a claim succeeds, start a child workflow <code>task:{taskId}</code> with a conflict policy that fails a second start. Workflow ID uniqueness then acts as a second fence behind the CAS. Restrict status changes to the assignee or the space owner; with compute budgets at stake, an audit trail alone is too weak.</p>
+    <p>Delete Raft's arm, fire and watchdog protocol. It exists because the timer lives on a laptop. A durable timer in the agent workflow does the same job, and Temporal Schedules cover recurring work.</p>
+    <p>Action cards map cleanly to a Temporal Update: the workflow waits for <code>decide(proposal_id)</code>, whose validator checks the caller's capability and that the proposal is still pending. Add a timer so proposals expire, which Raft lacks. Execute the frozen payload exactly as approved.</p>
+  </div>
+</section>
+
+<!-- ============ 10 ============ -->
+<section id="perms" class="chapter">
+  <div class="chap-label">Chapter 10</div>
+  <h2>Who may do what</h2>
+  <div class="prose">
+    <p class="lede">Humans and agents are both principals. Both hold a role in the workspace, both join channels, and both are checked against the same table of 40 named capabilities. They authenticate differently and pass through different gates on the way in.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 20 · Two front doors, one capability table</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 350" role="img" aria-label="Human requests pass a 15 minute JWT, a live session family check, workspace membership, the role to capability table, and canUserAccessChannel. Agent requests pass an sk_agent key lookup, credential capabilities, scopes on a few routes, the agent's role in the same capability table, and canAgentAccessChannel.">
+      <text x="240" y="24" class="b mid t-human">Human request</text>
+      <text x="760" y="24" class="b mid t-agent">Agent request</text>
+      <rect x="40" y="40" width="400" height="44" rx="8" class="k-human"/><text x="56" y="67"><tspan class="b">JWT access token</tspan><tspan class="sm" dx="8">15 min</tspan></text>
+      <rect x="40" y="96" width="400" height="44" rx="8" class="k-human"/><text x="56" y="123"><tspan class="b">Session family not revoked</tspan><tspan class="sm" dx="8">checked on every request</tspan></text>
+      <rect x="40" y="152" width="400" height="44" rx="8" class="k-human"/><text x="56" y="179"><tspan class="b">Workspace member</tspan><tspan class="sm" dx="8">owner, admin, member, guest</tspan></text>
+      <rect x="40" y="208" width="400" height="44" rx="8" class="box"/><text x="56" y="235"><tspan class="b">Role → capabilities</tspan><tspan class="sm" dx="8">e.g. editAgents</tspan></text>
+      <rect x="40" y="264" width="400" height="44" rx="8" class="box"/><text x="56" y="291" class="mono b">canUserAccessChannel</text>
+      <path d="M240,84 V94 M240,140 V150 M240,196 V206 M240,252 V262" class="ln ln-human"/>
+
+      <rect x="560" y="40" width="400" height="44" rx="8" class="k-agent"/><text x="576" y="67"><tspan class="b">sk_agent_ key</tspan><tspan class="sm" dx="8">prefix lookup + argon2 → agent id</tspan></text>
+      <rect x="560" y="96" width="400" height="44" rx="8" class="k-agent"/><text x="576" y="123"><tspan class="b">Credential capability</tspan><tspan class="sm" dx="8">9: send, read, tasks, …</tspan></text>
+      <rect x="560" y="152" width="400" height="44" rx="8" class="k-agent dashed"/><text x="576" y="179"><tspan class="b">Scopes</tspan><tspan class="sm" dx="8">19, read on only a few routes</tspan></text>
+      <rect x="560" y="208" width="400" height="44" rx="8" class="box"/><text x="576" y="235"><tspan class="b">Agent's role → capabilities</tspan><tspan class="sm" dx="8">member or admin</tspan></text>
+      <rect x="560" y="264" width="400" height="44" rx="8" class="box"/><text x="576" y="291" class="mono b">canAgentAccessChannel</text>
+      <path d="M760,84 V94 M760,140 V150 M760,196 V206 M760,252 V262" class="ln ln-agent"/>
+
+      <rect x="452" y="206" width="96" height="48" rx="8" class="k-server"/><text x="500" y="226" class="xs mid b" style="fill:var(--ink)">same table</text><text x="500" y="242" class="xs mid mono">40 caps</text>
+      <path d="M440,230 L450,230 M550,230 L560,230" class="ln ln-server"/>
+      <text x="500" y="336" class="sm mid">One visibility function per principal type, called from HTTP routes, socket room joins, replay and attachments.</text>
+    </svg>
+    </div>
+    <figcaption><b>Code asks for named capabilities, never "is admin".</b> <code>hasServerCapability(role, "editAgents")</code> reads from one table in <code>packages/shared/src/serverPermissions.ts</code>, and a test pins every role and capability cell. <code>canUserAccessChannel</code> takes a mandatory workspace id, so a channel UUID from another tenant cannot pass (51 call sites across 19 files).</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p><strong>Revocation is pushed, not waited out.</strong> When a session is revoked, a role changes or a channel goes private, the service commits and then evicts the affected sockets on every replica, with an acknowledged fan-out over Redis (<code>S/socket/accessRevocation.ts</code>). New sockets register themselves before their first database await, so a revocation that lands during the handshake still finds them. Agents run for hours, and a 15-minute token is not a revocation story.</p>
+    <p><strong>Creator authority is a second path.</strong> The person who created an agent can still manage its credentials and scopes after being demoted to member (<code>S/lib/actorPermissions.ts:82-90</code>). That fits "my research agent in our shared team space".</p>
+    <p><strong>Visibility is separate from delivery.</strong> Members can read everything in a channel, but only members and thread followers get deliveries. A mention of an agent that is not in a private channel resolves to nobody, so a mention cannot pull an agent into a room it has no access to.</p>
+  </div>
+
+  <div class="edge"><div class="el">Sharp edge</div><p>Agents have four overlapping permission vocabularies: workspace capabilities, channel roles, 9 credential capabilities and 19 grantable scopes, and two of them are stored in columns both called <code>scopes</code>. The daemon mints every key with all 9 capabilities, and the current agent API reads the human-editable scopes on only two routes. Revoking a scope in the UI therefore has little effect on a managed agent today. The manual and the code also disagree about what the member role may do.</p></div>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>One <code>principals</code> table with <code>kind</code> human, agent or system. Every "who did this" foreign key points at it. One <code>can(principal, capability, resource)</code> function, used by the REST API, the websocket subscribe handler, the gateway tools, and any Temporal query or update your UI can reach. Temporal namespaces are not a tenancy boundary for a multiplayer UI.</p>
+    <p>Start with role → capabilities plus optional per-agent narrowing, and nothing else. When agent A asks agent B to act, B acts as B.</p>
+  </div>
+</section>
+
+<!-- ============ 11 ============ -->
+<section id="watch" class="chapter">
+  <div class="chap-label">Chapter 11</div>
+  <h2>Watching agents work</h2>
+  <p class="here"><b>step 12</b> Alice and Bob see scout thinking and working</p>
+  <div class="prose">
+    <p class="lede">Raft keeps two separate streams. <strong>Activity</strong> is product data for people: a small closed status plus a trajectory of what the agent did. <strong>Traces</strong> are engineering data: OpenTelemetry-style spans that never go to Postgres.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 21 · What humans see, and what engineers debug</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 318" role="img" aria-label="Activity pipeline: runtime events go to the daemon, which drops unknown kinds, then to the server, which derives the visible status, guards by launch and sequence, stores in memory, Redis and Postgres, and pushes agent:activity without trajectory entries to browsers, which dedupe by serverSeq. Trace pipeline: spans go to rotating local files, the server signs a short-lived upload grant, an upload worker writes to object storage and ingests into OTLP and ScopeDB.">
+      <text x="20" y="22" class="b">What humans see · Activity</text>
+      <rect x="20" y="34" width="130" height="92" rx="8" class="k-agent"/><text x="85" y="62" class="b mid">Runtime</text><text x="85" y="82" class="xs mid">thinking, tool calls,</text><text x="85" y="96" class="xs mid">text, turn end</text>
+      <path d="M150,80 L166,80" class="ln" marker-end="url(#ah)"/>
+      <rect x="168" y="34" width="150" height="92" rx="8" class="k-daemon"/><text x="243" y="62" class="b mid">Daemon</text><text x="243" y="82" class="xs mid">sends a detail kind,</text><text x="243" y="96" class="xs mid">drops unknown kinds</text><text x="243" y="110" class="xs mid">launchId, clientSeq</text>
+      <path d="M318,80 L334,80" class="ln" marker-end="url(#ah)"/>
+      <rect x="336" y="34" width="190" height="92" rx="8" class="k-server"/><text x="431" y="62" class="b mid">Server</text><text x="431" y="82" class="xs mid">derives the visible status</text><text x="431" y="96" class="xs mid">drops stale launch or seq</text><text x="431" y="110" class="xs mid">heartbeats never stored</text>
+      <path d="M526,80 L542,80" class="ln" marker-end="url(#ah)"/>
+      <rect x="544" y="34" width="180" height="92" rx="8" class="k-pg"/><text x="634" y="58" class="b mid">Stored</text><text x="634" y="78" class="xs mid">memory snapshot</text><text x="634" y="92" class="xs mid">Redis mirror, 10 min</text><text x="634" y="106" class="xs mid">agent_activity_events</text><text x="634" y="120" class="xs mid">(facts only, deduped)</text>
+      <path d="M724,80 L740,80" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
+      <rect x="742" y="34" width="118" height="92" rx="8" class="k-redis"/><text x="801" y="62" class="b mid">Socket.IO</text><text x="801" y="82" class="xs mid">agent:activity</text><text x="801" y="96" class="xs mid">no trajectory</text><text x="801" y="110" class="xs mid">in the push</text>
+      <path d="M860,80 L876,80" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
+      <rect x="878" y="34" width="102" height="92" rx="8" class="k-human"/><text x="929" y="62" class="b mid">Browser</text><text x="929" y="82" class="xs mid">keeps highest</text><text x="929" y="96" class="xs mid">serverSeq; pulls</text><text x="929" y="110" class="xs mid">trajectory by REST</text>
+
+      <text x="500" y="160" class="sm mid">shared join keys: launchId, clientSeq, producerFactId</text>
+      <path d="M160,168 L840,168" class="ln ln-muted dashed"/>
+
+      <text x="20" y="196" class="b">What engineers debug · Traces</text>
+      <rect x="20" y="208" width="130" height="92" rx="8" class="k-daemon"/><text x="85" y="236" class="b mid">Spans</text><text x="85" y="256" class="xs mid">server, daemon,</text><text x="85" y="270" class="xs mid">Computer, web</text>
+      <path d="M150,254 L166,254" class="ln" marker-end="url(#ah)"/>
+      <rect x="168" y="208" width="150" height="92" rx="8" class="k-daemon"/><text x="243" y="236" class="b mid">Local files</text><text x="243" y="256" class="xs mid">JSONL, 5 MB or 5 min,</text><text x="243" y="270" class="xs mid">keep 8, sanitised</text>
+      <path d="M318,254 L334,254" class="ln" marker-end="url(#ah)"/>
+      <rect x="336" y="208" width="190" height="92" rx="8" class="k-server"/><text x="431" y="236" class="b mid">Server signs a grant</text><text x="431" y="256" class="xs mid">2 min, fixed object key,</text><text x="431" y="270" class="xs mid">max 50 MB, sha256</text>
+      <path d="M526,254 L542,254" class="ln" marker-end="url(#ah)"/>
+      <rect x="544" y="208" width="180" height="92" rx="8" class="box"/><text x="634" y="236" class="b mid">Upload worker</text><text x="634" y="256" class="xs mid">object storage (R2)</text><text x="634" y="270" class="xs mid">+ a ledger per upload</text>
+      <path d="M724,254 L740,254" class="ln" marker-end="url(#ah)"/>
+      <rect x="742" y="208" width="238" height="92" rx="8" class="box"/><text x="861" y="236" class="b mid">OTLP and ScopeDB</text><text x="861" y="256" class="xs mid">span_key for dedupe on read</text><text x="861" y="270" class="xs mid">bytes never pass the API server</text>
+    </svg>
+    </div>
+    <figcaption><b>The producer reports facts; the server decides what they mean.</b> The daemon sends a detail kind such as <code>tool_started</code>, and the server maps it to the visible status, so producers cannot invent states. Two sequence numbers keep order without clocks: <code>clientSeq</code> per launch lets the server drop replays, and a per-agent <code>serverSeq</code> lets browsers drop stale pushes. Trajectory entries stay out of the broadcast, because not everyone in the workspace may see an agent's private work.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p>Tracing is written to local files first and uploaded later in bulk, so it never blocks the agent host and survives a server outage. The server hands out a signed, two-minute grant that fixes the object key and size, and an upload worker stores the bytes, so trace data never passes through the API server. A trace family registry makes every span family name who reads it and at what privacy tier.</p>
+  </div>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>Never show Temporal event history to users. Have agent and task workflows write rows into a small <code>agent_activity</code> table with a closed vocabulary (idle, thinking, working, waiting for a human, error, paused) and push a hint. Send engineering telemetry to AgentCore Observability or CloudWatch. For ordering, a durable per-agent counter in Postgres is stronger than Raft's in-memory <code>serverSeq</code>, which resets when a replica restarts.</p>
+  </div>
+</section>
+
+<!-- ============ 12 ============ -->
+<section id="outage" class="chapter">
+  <div class="chap-label">Chapter 12</div>
+  <h2>When a machine drops</h2>
+  <div class="prose">
+    <p class="lede">scout is mid-turn when Alice's Wi-Fi drops for three minutes. This chapter follows what the system does, and then lists what comes back and what is lost.</p>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 22 · Three minutes offline</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 300" role="img" aria-label="Timeline: Wi-Fi drops and agents keep running locally. The server notices a closed socket or 60 seconds of silence. After a 2 second grace the lease is deleted and agents show machine disconnected. After 60 more seconds the owner is notified. Bob's mention is saved and its delivery parks. At three minutes the daemon reconnects to any replica, sends ready with its running agents, the server reconciles and re-sends mention rows.">
+      <rect x="230" y="138" width="490" height="24" class="band"/>
+      <text x="600" y="155" class="xs mid t-bad">machine shown offline</text>
+      <path d="M40,150 L960,150" class="ln ln-muted" marker-end="url(#ah-muted)"/>
+      <text x="960" y="176" class="xs end">time</text>
+
+      <circle cx="60" cy="150" r="6" class="f-agent"/>
+      <path d="M60,144 L60,102" class="ln ln-muted"/>
+      <text x="40" y="60" class="b sm" style="fill:var(--ink)">Wi-Fi drops</text><text x="40" y="76" class="xs">scout keeps running;</text><text x="40" y="90" class="xs">activity coalesced</text>
+
+      <circle cx="100" cy="150" r="6" class="f-server"/>
+      <path d="M100,156 L100,196" class="ln ln-muted"/>
+      <text x="80" y="214" class="b sm" style="fill:var(--ink)">server notices</text><text x="80" y="230" class="xs">socket close, or</text><text x="80" y="244" class="xs">60 s with no pong</text>
+
+      <circle cx="230" cy="150" r="6" class="f-redis"/>
+      <path d="M230,144 L230,102" class="ln ln-muted"/>
+      <text x="200" y="60" class="b sm" style="fill:var(--ink)">+2 s grace over</text><text x="200" y="76" class="xs">lease CAS-deleted</text><text x="200" y="90" class="xs">"Machine disconnected"</text>
+
+      <circle cx="330" cy="150" r="6" class="f-human"/>
+      <path d="M330,156 L330,196" class="ln ln-muted"/>
+      <text x="300" y="214" class="b sm" style="fill:var(--ink)">+60 s</text><text x="300" y="230" class="xs">outage row becomes</text><text x="300" y="244" class="xs">"notified"; owner alerted</text>
+
+      <circle cx="470" cy="150" r="6" class="f-human"/>
+      <path d="M470,144 L470,102" class="ln ln-muted"/>
+      <text x="420" y="60" class="b sm" style="fill:var(--ink)">Bob: "@scout status?"</text><text x="420" y="76" class="xs">saved, visible to people;</text><text x="420" y="90" class="xs">delivery parks</text>
+
+      <circle cx="720" cy="150" r="6" class="f-daemon"/>
+      <path d="M720,156 L720,196" class="ln ln-muted"/>
+      <text x="660" y="214" class="b sm" style="fill:var(--ink)">+3 min reconnect</text><text x="660" y="230" class="xs">to any replica; new lease</text><text x="660" y="244" class="xs">generation; "online"</text>
+
+      <circle cx="810" cy="150" r="6" class="f-server"/>
+      <path d="M810,144 L810,102" class="ln ln-muted"/>
+      <text x="770" y="60" class="b sm" style="fill:var(--ink)">ready {running: scout}</text><text x="770" y="76" class="xs">reconcile each agent</text>
+
+      <circle cx="900" cy="150" r="6" class="f-good"/>
+      <path d="M900,156 L900,196" class="ln ln-muted"/>
+      <text x="850" y="214" class="b sm" style="fill:var(--ink)">recovery</text><text x="850" y="230" class="xs">mention rows re-sent;</text><text x="850" y="244" class="xs">parked sends resume</text>
+      <text x="40" y="288" class="xs">Not to scale. A reconnect to the same replica within the 2 s grace is invisible to users.</text>
+    </svg>
+    </div>
+    <figcaption><b>The agent does not stop.</b> The daemon keeps agents running while disconnected and reconnects with backoff from 1 s up to 30 s. On the server, a disconnect changes the runtime state to <code>interrupted</code> and leaves <code>agents.status</code> alone. When scout finishes its turn and tries to send, the HTTPS call fails, the CLI reports <code>UNKNOWN</code> and keeps the draft. After reconnect, <code>--send-draft</code> meets the freshness gate, which shows scout Bob's newer message before letting the reply through.</figcaption>
+  </figure>
+
+  <h3>What survives</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Item</th><th>Lives in</th><th>Reconnect, same replica</th><th>Reconnect, other replica</th><th>Server replica crashes</th></tr></thead>
+      <tbody>
+        <tr><td>Messages, tasks, reminders</td><td>Postgres</td><td><span class="pill p-good">safe</span></td><td><span class="pill p-good">safe</span></td><td><span class="pill p-good">safe</span></td></tr>
+        <tr><td>@mention delivery</td><td>ledger row</td><td><span class="pill p-good">re-sent on ready</span></td><td><span class="pill p-good">re-sent on ready</span></td><td><span class="pill p-good">re-sent on ready</span></td></tr>
+        <tr><td>Ordinary channel delivery</td><td>replica memory</td><td><span class="pill p-good">unparked</span></td><td><span class="pill p-warn">stranded*</span></td><td><span class="pill p-bad">lost from memory*</span></td></tr>
+        <tr><td>Agent process and its context</td><td>laptop</td><td><span class="pill p-good">keeps running</span></td><td><span class="pill p-good">keeps running</span></td><td><span class="pill p-good">keeps running</span></td></tr>
+        <tr><td>Activity produced offline</td><td>daemon memory</td><td><span class="pill p-warn">latest frame only</span></td><td><span class="pill p-warn">latest frame only</span></td><td><span class="pill p-warn">latest frame only</span></td></tr>
+        <tr><td>scout's unsent reply</td><td>CLI draft file</td><td><span class="pill p-good">--send-draft</span></td><td><span class="pill p-good">--send-draft</span></td><td><span class="pill p-good">--send-draft</span></td></tr>
+        <tr><td>Wake lock</td><td>Redis, 30 s</td><td><span class="pill p-good">expires</span></td><td><span class="pill p-good">expires</span></td><td><span class="pill p-good">expires</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>* The message is still in Postgres and still unread. scout meets it again through the freshness gate on its next send there, the unread count on its next start, or by reading the channel. The stranding is inferred from code: the retry loop walks only the local replica's map, and no message tells other replicas that a machine is ready.</p>
+    <p>A planned deploy is smoother. The shutdown path stops accepting HTTP first, drops pending "offline" projections, closes each daemon socket and releases its lease, so daemons reconnect elsewhere and people never see "offline".</p>
+  </div>
+
+  <div class="yours">
+    <div class="yl">In your stack</div>
+    <p>Most of this chapter disappears. A Temporal worker crash does not lose a signal or a timer, and the agent workflow knows whether its activity is still running. The part that stays is <strong>zombie sessions</strong>: an activity times out, Temporal retries and starts session B, and session A is still making tool calls. Fence it the way Raft fences launches. Bump <code>agents.session_generation</code> before each invoke, stamp it on every tool call at the gateway, and reject writes whose generation is old.</p>
+  </div>
+</section>
+
+<!-- ============ 13 ============ -->
+<section id="yours" class="chapter">
+  <div class="chap-label">Chapter 13</div>
+  <h2>Bringing it to your stack</h2>
+  <div class="prose">
+    <p class="lede">Much of Raft's complexity exists because it runs agents as long-lived processes on people's laptops, reached through one WebSocket per machine. You do not have that problem. Temporal gives you durable execution, retries and one-workflow-per-ID. AgentCore gives you isolated, resumable sessions. So copy Raft's data model and protocols, and leave its transport behind.</p>
+    <p>What remains are shared-state problems, and Temporal does not solve those: the outbox, idempotency keys, the freshness gate, the claim, session fencing and one permission function.</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Raft part</th><th>Verdict</th><th>In your system</th></tr></thead>
+      <tbody>
+        <tr><td>Messages, channels, global <code>seq</code></td><td><span class="pill p-pg">copy</span></td><td><code>spaces</code>, <code>messages</code> with a per-space <code>bigint</code> seq, <code>space_cursors</code> for every principal</td></tr>
+        <tr><td>One transaction for message + derived facts + outbox</td><td><span class="pill p-pg">copy</span></td><td><code>outbox</code> table drained by a relay workflow</td></tr>
+        <tr><td><code>randomId</code> / <code>agent_send_key</code> idempotency</td><td><span class="pill p-pg">copy, stricter</span></td><td>key required for every sender; generated in workflow code for activities</td></tr>
+        <tr><td>Freshness gate (<code>seenUpToSeq</code>)</td><td><span class="pill p-pg">copy exactly</span></td><td>inside <code>post_message</code> and <code>claim_task</code>; tool layer fills the seq</td></tr>
+        <tr><td>Task claim CAS, <code>task_events</code></td><td><span class="pill p-pg">copy</span></td><td>same SQL, plus <code>task:{id}</code> child workflow after a won claim</td></tr>
+        <tr><td>Launch ID fencing</td><td><span class="pill p-pg">copy</span></td><td><code>session_generation</code> stamped on every tool call</td></tr>
+        <tr><td>Capability table + <code>canUserAccessChannel</code></td><td><span class="pill p-pg">copy</span></td><td><code>principals</code> + one <code>can()</code> for REST, websocket, tools, queries</td></tr>
+        <tr><td>Activity kept apart from traces</td><td><span class="pill p-pg">copy</span></td><td><code>agent_activity</code> table vs AgentCore Observability</td></tr>
+        <tr><td>Manual + <code>agent_knowledge_events</code></td><td><span class="pill p-pg">copy</span></td><td><code>docs_search</code> tool over versioned protocol docs, with tested sentences</td></tr>
+        <tr><td>Mention delivery ledger (7 states)</td><td><span class="pill p-warn">simplify</span></td><td><code>deliveries</code> for mentions and assignments, 4 states</td></tr>
+        <tr><td>Planner functions + single writer</td><td><span class="pill p-temporal">Temporal</span></td><td>deterministic workflow code; effects in activities</td></tr>
+        <tr><td>Redis wake lock</td><td><span class="pill p-temporal">Temporal</span></td><td>workflow ID <code>agent:{id}</code></td></tr>
+        <tr><td>In-memory inbox, 5 s × 24 resend</td><td><span class="pill p-temporal">Temporal</span></td><td>signals + activity retry policy</td></tr>
+        <tr><td>Reminder arm / fire / watchdog</td><td><span class="pill p-temporal">Temporal</span></td><td>durable timers; Schedules for recurring</td></tr>
+        <tr><td>Action cards</td><td><span class="pill p-temporal">Temporal</span></td><td>Update with a validator, plus an expiry timer</td></tr>
+        <tr><td>Daemon, Computer, upgrader, crash budgets</td><td><span class="pill p-ac">AgentCore</span></td><td>Runtime sessions; keep the idea of classifying failures before retrying</td></tr>
+        <tr><td>Credential proxy (<code>sap_</code> → <code>sk_agent_</code>)</td><td><span class="pill p-ac">AgentCore</span></td><td>Identity + Gateway stamp the principal</td></tr>
+        <tr><td><code>raft</code> CLI + contract table</td><td><span class="pill p-ac">AgentCore</span></td><td>Gateway tools generated from one contract</td></tr>
+        <tr><td><code>MEMORY.md</code> in the workspace</td><td><span class="pill p-ac">AgentCore</span></td><td>Memory with actor = agent id</td></tr>
+        <tr><td>Redis owner lease, cross-replica routing, HTTP replay</td><td><span class="pill p-bad">skip</span></td><td>nothing; no socket is pinned to a replica</td></tr>
+        <tr><td>Daemon reconnect, heartbeats, 2 s grace, stale probes</td><td><span class="pill p-bad">skip</span></td><td>the workflow knows whether its activity runs; heartbeat timeouts catch stuck ones</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <figure>
+    <div class="fig-title">Figure 23 · A multiplayer version of your system</div>
+    <div class="scroll">
+    <svg class="w720" viewBox="0 0 1000 420" role="img" aria-label="Proposed architecture. Browsers post to your API, which writes one Postgres transaction with the message and outbox rows and pushes a hint through a websocket fan-out. An outbox relay workflow signals-with-start the per-agent Temporal workflow, which invokes an AgentCore Runtime session running Claude on Bedrock. The session calls tools through AgentCore Gateway, which stamps identity and session generation and calls your API, where the freshness gate and claim CAS run. A won claim starts a task child workflow.">
+      <rect x="20" y="40" width="150" height="56" rx="8" class="k-human"/><text x="95" y="64" class="b mid">Browsers</text><text x="95" y="82" class="xs mid">Alice, Bob</text>
+      <rect x="20" y="180" width="150" height="56" rx="8" class="k-redis"/><text x="95" y="204" class="b mid">WebSocket fan-out</text><text x="95" y="222" class="xs mid">space:{id}</text>
+      <rect x="240" y="40" width="220" height="100" rx="8" class="k-server"/><text x="254" y="64" class="b">Your API</text><text x="254" y="84" class="xs mono">can(principal, action, res)</text><text x="254" y="102" class="xs">freshness gate · claim CAS</text><text x="254" y="120" class="xs">idempotency keys required</text>
+      <rect x="240" y="200" width="220" height="150" rx="8" class="k-pg"/><text x="254" y="224" class="b">Postgres</text>
+      <text x="254" y="246" class="xs mono">spaces · messages(seq)</text><text x="254" y="264" class="xs mono">space_cursors · tasks</text><text x="254" y="282" class="xs mono">deliveries · outbox</text><text x="254" y="300" class="xs mono">action_proposals</text><text x="254" y="318" class="xs mono">agent_activity</text><text x="254" y="336" class="xs mono">principals · space_members</text>
+      <rect x="540" y="40" width="190" height="90" rx="8" class="k-daemon"/><text x="554" y="64" class="b mono" style="font-size:12px">agent:{id} workflow</text><text x="554" y="84" class="xs">pending map, cursors</text><text x="554" y="100" class="xs">session generation</text><text x="554" y="116" class="xs">continue-as-new</text>
+      <rect x="540" y="152" width="190" height="52" rx="8" class="k-daemon"/><text x="554" y="176" class="b mono" style="font-size:12px">task:{id} workflow</text><text x="554" y="194" class="xs">child, one per claimed task</text>
+      <rect x="540" y="250" width="190" height="60" rx="8" class="k-daemon"/><text x="554" y="274" class="b">Outbox relay</text><text x="554" y="292" class="xs">workflow + drain activity</text>
+      <rect x="790" y="40" width="190" height="90" rx="8" class="k-agent"/><text x="804" y="64" class="b">AgentCore session</text><text x="804" y="84" class="xs">Claude via Bedrock</text><text x="804" y="100" class="xs">Memory: actor = agent</text><text x="804" y="116" class="xs">disposable, resumable</text>
+      <rect x="790" y="170" width="190" height="70" rx="8" class="k-agent"/><text x="804" y="194" class="b">AgentCore Gateway</text><text x="804" y="212" class="xs">+ Identity: stamps agent</text><text x="804" y="228" class="xs">and session generation</text>
+
+      <path d="M170,68 L238,68" class="ln ln-human" marker-end="url(#ah-human)"/>
+      <g class="badge"><circle cx="204" cy="68" r="10"/><text x="204" y="72">1</text></g>
+      <path d="M350,140 L350,198" class="ln ln-pg" marker-end="url(#ah-pg)"/>
+      <g class="badge"><circle cx="350" cy="169" r="10"/><text x="350" y="173">2</text></g>
+      <path d="M240,122 L205,122 L205,208 L172,208" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
+      <g class="badge"><circle cx="205" cy="165" r="10"/><text x="205" y="169">3</text></g>
+      <path d="M60,180 L60,98" class="ln ln-redis dashed" marker-end="url(#ah-redis)"/>
+      <text x="72" y="144" class="xs">hint only</text>
+      <path d="M460,280 L538,280" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <g class="badge"><circle cx="499" cy="280" r="10"/><text x="499" y="284">4</text></g>
+      <path d="M730,280 L760,280 L760,85 L732,85" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+      <g class="badge"><circle cx="760" cy="182" r="10"/><text x="760" y="186">5</text></g>
+      <path d="M730,62 L788,62" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <g class="badge"><circle cx="759" cy="62" r="10"/><text x="759" y="66">6</text></g>
+      <path d="M885,130 L885,168" class="ln ln-agent" marker-end="url(#ah-agent)"/>
+      <g class="badge"><circle cx="885" cy="149" r="10"/><text x="885" y="153">7</text></g>
+      <path d="M790,225 L480,225 L480,110 L462,110" class="ln ln-server" marker-end="url(#ah-server)"/>
+      <g class="badge"><circle cx="620" cy="225" r="10"/><text x="620" y="229">8</text></g>
+      <path d="M635,130 L635,150" class="ln ln-daemon" marker-end="url(#ah-daemon)"/>
+
+      <rect x="20" y="374" width="14" height="14" rx="3" class="k-server"/><text x="42" y="386" class="sm">your API</text>
+      <rect x="130" y="374" width="14" height="14" rx="3" class="k-pg"/><text x="152" y="386" class="sm">Postgres (shared world)</text>
+      <rect x="320" y="374" width="14" height="14" rx="3" class="k-daemon"/><text x="342" y="386" class="sm">Temporal (execution)</text>
+      <rect x="500" y="374" width="14" height="14" rx="3" class="k-agent"/><text x="522" y="386" class="sm">AgentCore + Bedrock</text>
+      <rect x="680" y="374" width="14" height="14" rx="3" class="k-redis"/><text x="702" y="386" class="sm">realtime hints</text>
+      <text x="20" y="410" class="xs">Message bodies never enter Temporal. Workflows carry seq numbers and ids only.</text>
+    </svg>
+    </div>
+    <figcaption><b>Postgres owns the shared world; Temporal owns execution.</b> The numbered steps follow the same mention as chapter 2.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <ol>
+      <li>Alice posts "@lit-reviewer compare these three papers".</li>
+      <li>The API checks <code>can()</code>, then one transaction writes the message with the next space seq, the mention, a <code>deliveries</code> row, and one <code>outbox</code> row per agent to wake.</li>
+      <li>After the commit, the API pushes <code>{space, seq}</code> to browsers. Browsers fetch <code>after_seq</code> themselves.</li>
+      <li>The relay workflow drains the outbox with <code>FOR UPDATE SKIP LOCKED</code>. Duplicates are harmless because the signal is only a hint.</li>
+      <li>It calls signal-with-start on <code>agent:{id}</code> with <code>{spaceId, seq, reason}</code>. The workflow folds it into a small <code>pending</code> map.</li>
+      <li>When idle, the workflow bumps <code>session_generation</code> in an activity, then invokes an AgentCore session with a short prompt: "new activity in #papers up to 812, you were mentioned".</li>
+      <li>The model calls tools through the Gateway.</li>
+      <li>The Gateway stamps identity and generation and calls your API. <code>read_space</code> advances <code>seen_seq</code>; <code>post_message</code> runs the freshness gate; <code>claim_task</code> runs the CAS. A won claim starts <code>task:{id}</code> as a child workflow.</li>
+    </ol>
+  </div>
+
+  <h3>The rules, with the trap for each</h3>
+  <div class="patterns">
+    <div class="pattern"><h4><span class="pn">P1</span>Commit, then notify through an outbox</h4>
+      <div class="raft"><div class="col-l">Raft</div><p>Message, mentions, inbox facts and Slack outbox in one transaction; socket emits after commit, errors swallowed.</p></div>
+      <div class="you"><div class="col-l">You</div><p>Outbox rows in the same transaction. A relay workflow signals Temporal and marks rows sent.</p></div>
+      <div class="trap"><div class="col-l">Trap</div><p>Signalling from the API handler after the insert. The first crash between the two loses a wake forever.</p></div></div>
+    <div class="pattern"><h4><span class="pn">P2</span>One sequence per stream, cursors for everyone</h4>
+      <div class="raft"><div class="col-l">Raft</div><p>Global <code>bigserial</code>; browsers resume by <code>lastSeq</code>, agents by read cursor.</p></div>
+      <div class="you"><div class="col-l">You</div><p>Per-space <code>next_seq</code> under a row lock; <code>space_cursors(read_seq, seen_seq)</code>.</p></div>
+      <div class="trap"><div class="col-l">Trap</div><p>A global sequence can commit out of order, and mixing <code>int4</code> cursors with <code>bigint</code> seq needs a migration later.</p></div></div>
+    <div class="pattern"><h4><span class="pn">P3</span>Every write carries a caller-made key</h4>
+      <div class="raft"><div class="col-l">Raft</div><p>Partial unique index plus insert-or-read-back. Agents' CLI sends no key, and the manual admits it.</p></div>
+      <div class="you"><div class="col-l">You</div><p>Required key. For activities, derive it in workflow code; for tool calls, from session id + tool call id.</p></div>
+      <div class="trap"><div class="col-l">Trap</div><p>Generating the key inside the activity. Each retry gets a new key and posts again.</p></div></div>
+    <div class="pattern"><h4><span class="pn">P4</span>Wake with a hint, let the agent pull</h4>
+      <div class="raft"><div class="col-l">Raft</div><p>stdin gets a notice; bodies wait in a local inbox; reading is observable.</p></div>
+      <div class="you"><div class="col-l">You</div><p>Signals carry <code>{space, seq, reason}</code>; the prompt names spaces; <code>read_space</code> fetches.</p></div>
+      <div class="trap"><div class="col-l">Trap</div><p>Signals live in workflow history. Keep them tiny and continue-as-new on a threshold. A stored signal does not mean the model saw anything.</p></div></div>
+    <div class="pattern"><h4><span class="pn">P5</span>Hold writes made on a stale view</h4>
+      <div class="raft"><div class="col-l">Raft</div><p><code>seenUpToSeq</code> on send, claim and status update; held responses show what was missed.</p></div>
+      <div class="you"><div class="col-l">You</div><p>Same check in <code>post_message</code> and <code>claim_task</code>; the tool layer supplies the seq, not the model.</p></div>
+      <div class="trap"><div class="col-l">Trap</div><p>Livelock in a busy space. Allow an explicit override after a few holds, and log every use.</p></div></div>
+    <div class="pattern"><h4><span class="pn">P6</span>The claim is one conditional UPDATE</h4>
+      <div class="raft"><div class="col-l">Raft</div><p>CAS on <code>revision</code>; the loser gets a reason from the row it lost to.</p></div>
+      <div class="you"><div class="col-l">You</div><p>Same SQL; a won claim starts <code>task:{id}</code>, a second fence by workflow ID.</p></div>
+      <div class="trap"><div class="col-l">Trap</div><p>Duplicate tasks from two triaging agents. Put a unique key on the source message.</p></div></div>
+    <div class="pattern"><h4><span class="pn">P7</span>Fence every incarnation</h4>
+      <div class="raft"><div class="col-l">Raft</div><p><code>launchId</code> on every signal; lease generations; identity snapshots on the ledger.</p></div>
+      <div class="you"><div class="col-l">You</div><p><code>session_generation</code> bumped before each invoke and stamped by the gateway on every tool call.</p></div>
+      <div class="trap"><div class="col-l">Trap</div><p>An AgentCore session that keeps making tool calls after the activity that started it timed out.</p></div></div>
+    <div class="pattern"><h4><span class="pn">P8</span>One principal model, one visibility function</h4>
+      <div class="raft"><div class="col-l">Raft</div><p>Humans and agents share a capability table; revocation evicts live sockets.</p></div>
+      <div class="you"><div class="col-l">You</div><p><code>principals</code> + <code>can()</code> in front of REST, websocket, tools and Temporal queries.</p></div>
+      <div class="trap"><div class="col-l">Trap</div><p>Letting permission vocabularies multiply. Raft's agents have four.</p></div></div>
+  </div>
+
+  <h3>A starting schema</h3>
+  <div class="prose"><p>Small and meant to grow. Temporal owns execution state; these tables own the shared world.</p></div>
+<pre><span class="c">-- humans and agents are both principals</span>
+CREATE TABLE principals (
+  id uuid PRIMARY KEY, kind text NOT NULL CHECK (kind IN ('human','agent','system')),
+  handle text NOT NULL, tenant_id uuid NOT NULL, UNIQUE (tenant_id, handle));
+
+CREATE TABLE agents (
+  principal_id uuid PRIMARY KEY REFERENCES principals(id),
+  owner_principal_id uuid NOT NULL REFERENCES principals(id),      <span class="c">-- creator authority</span>
+  desired_state text NOT NULL DEFAULT 'available',                 <span class="c">-- intent, edited by people</span>
+  session_generation bigint NOT NULL DEFAULT 0,                    <span class="c">-- the fence (P7)</span>
+  current_session_id text);                                        <span class="c">-- AgentCore runtimeSessionId</span>
+
+<span class="c">-- DMs, threads and task threads are all spaces</span>
+CREATE TABLE spaces (
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL,
+  kind text NOT NULL CHECK (kind IN ('space','private','dm','thread')),
+  parent_message_id uuid, next_seq bigint NOT NULL DEFAULT 0);    <span class="c">-- per-space seq (P2)</span>
+
+CREATE TABLE messages (
+  id uuid PRIMARY KEY, space_id uuid NOT NULL REFERENCES spaces(id),
+  seq bigint NOT NULL, sender_id uuid NOT NULL REFERENCES principals(id),
+  body text NOT NULL, idempotency_key text NOT NULL, content_hash text NOT NULL,
+  session_generation bigint,
+  UNIQUE (space_id, seq), UNIQUE (sender_id, idempotency_key));   <span class="c">-- P3</span>
+
+CREATE TABLE space_cursors (
+  principal_id uuid, space_id uuid,
+  read_seq bigint NOT NULL DEFAULT 0,     <span class="c">-- unread badges</span>
+  seen_seq bigint NOT NULL DEFAULT 0,     <span class="c">-- what the model actually received (P5)</span>
+  PRIMARY KEY (principal_id, space_id));
+
+CREATE TABLE deliveries (                 <span class="c">-- mentions and assignments only</span>
+  message_id uuid, recipient_id uuid,
+  state text NOT NULL DEFAULT 'recorded' CHECK (state IN ('recorded','dispatched','seen','failed')),
+  session_generation bigint, PRIMARY KEY (message_id, recipient_id));
+
+CREATE TABLE tasks (
+  id uuid PRIMARY KEY, space_id uuid NOT NULL,
+  source_message_id uuid NOT NULL UNIQUE,                          <span class="c">-- no duplicate tasks (P6)</span>
+  status text NOT NULL DEFAULT 'todo', assignee_id uuid, claimed_at timestamptz,
+  revision bigint NOT NULL DEFAULT 0, workflow_id text,
+  CHECK (claimed_at IS NULL OR assignee_id IS NOT NULL));
+
+CREATE TABLE outbox (                     <span class="c">-- the bridge to Temporal (P1)</span>
+  id bigserial PRIMARY KEY, kind text NOT NULL, target text NOT NULL,
+  payload jsonb NOT NULL, sent_at timestamptz);                    <span class="c">-- hints only, never bodies</span></pre>
+
+<pre><span class="c">-- post a message: the space row lock serialises seq per space</span>
+WITH s AS (UPDATE spaces SET next_seq = next_seq + 1 WHERE id = $space RETURNING next_seq)
+INSERT INTO messages (id, space_id, seq, sender_id, body, idempotency_key, content_hash)
+SELECT gen_random_uuid(), $space, s.next_seq, $sender, $body, $key, $hash FROM s
+ON CONFLICT (sender_id, idempotency_key) DO NOTHING
+RETURNING *;
+<span class="c">-- no row back: read the original by (sender_id, key), compare space_id and content_hash.
+-- the conflict still used up a seq; a hole in the sequence is harmless.</span></pre>
+
+  <h3>A build order</h3>
+  <div class="prose">
+    <ol>
+      <li><code>principals</code>, <code>spaces</code>, <code>messages</code> with per-space seq and required keys, <code>space_cursors</code>. Ship <code>read_space</code> and <code>post_message</code> with the freshness gate. Websocket hint plus <code>after_seq</code> pull.</li>
+      <li>Outbox and relay into signal-with-start on <code>agent:{id}</code>. The agent workflow: pending map, one AgentCore invoke per turn, generation fence, continue-as-new.</li>
+      <li><code>tasks</code> with the claim CAS, <code>task_events</code>, and <code>task:{id}</code> child workflows.</li>
+      <li><code>deliveries</code> for mentions and assignments, with recovery at the start of each turn.</li>
+      <li>Action proposals on a Temporal Update with an expiry timer.</li>
+      <li><code>agent_activity</code> for the UI; traces to AgentCore Observability, kept separate.</li>
+      <li><code>docs_search</code>, <code>agent_knowledge_events</code>, and protocol docs such as claim-lock and shard-and-merge, with tests on the sentences agents rely on.</li>
+    </ol>
+    <p class="xs" style="font-size:13.5px;color:var(--muted)">Temporal and AgentCore specifics here are limited to well-known features: workflow ID uniqueness, signals, updates, queries, child workflows, timers, schedules, continue-as-new, activity retries, and AgentCore Runtime sessions, Memory, Gateway, Identity and Observability. Check current session lifetime and history limits in the AWS and Temporal docs before you size anything.</p>
+  </div>
+</section>
+
+<!-- ============ 14 ============ -->
+<section id="dont" class="chapter">
+  <div class="chap-label">Chapter 14</div>
+  <h2>What not to copy</h2>
+  <div class="prose">
+    <p class="lede">Raft is a real system under active change, and some parts are mid-migration. These are the places where the code, the comments and the manual disagree, or where a shortcut was taken. Each is verified in this release unless marked inferred.</p>
+    <ul>
+      <li><strong>Agent sends are not idempotent.</strong> The server supports a key, the CLI never sends one, and retries create duplicates. The SDK can retry without a key if a caller raises its retry count.</li>
+      <li><strong>The daemon's freshness check misses <code>/v2/send</code>.</strong> Only the server gate protects CLI sends.</li>
+      <li><strong>Ordinary deliveries live in one replica's memory.</strong> They can be stranded when a machine reconnects to a different replica (inferred), and the inbox drops its oldest entry silently past 1000.</li>
+      <li><strong>The mention ledger can become unrecoverable</strong> if the post-commit payload write fails, by design.</li>
+      <li><strong>Global seq with <code>int4</code> read cursors.</strong> A tripwire watches the headroom, and an <code>int8</code> shadow column is half migrated.</li>
+      <li><strong>Any member can move any task</strong>, and admin force-retries make the transition table advisory. The comment above the table still says assignee-only.</li>
+      <li><strong>Four permission vocabularies for agents</strong>, with human-editable scopes read on only two agent API routes.</li>
+      <li><strong>The manual and the code disagree</strong> on message edit and delete, on what the member role may do, and it names a capability (<code>manageChannels</code>) that does not exist.</li>
+      <li><strong>No refresh-token reuse detection.</strong> A rotated refresh token replayed after the 10 s grace fails quietly instead of revoking the session family.</li>
+      <li><strong>Agent credentials have no expiry.</strong> Revocation depends on the daemon's fire-and-forget DELETE.</li>
+      <li><strong>Action cards never expire</strong> and cannot be rejected or recalled.</li>
+      <li><strong>Workflows do not advance on their own</strong> when a step's task is done; a human route must call the next step.</li>
+      <li><strong>Very large files</strong>: <code>agentOrchestrator.ts</code> 12.5k lines, <code>messageService.ts</code> 9.3k, <code>agentProcessManager.ts</code> 8.1k. The planners inside are small and well tested; the classes around them are not.</li>
+    </ul>
+    <p>The parts worth copying are small and sharp: the transaction boundary, the seq cursor, the freshness gate, the claim CAS, the fences, the pure planners and the tested protocol docs.</p>
+  </div>
+</section>
+
+<!-- ============ Appendix ============ -->
+<section id="glossary" class="chapter">
+  <div class="chap-label">Appendix</div>
+  <h2>Glossary and code map</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Term</th><th>Meaning</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td>server</td><td>A workspace, in the data model. Not the Node process.</td><td><code>servers</code> table</td></tr>
+        <tr><td>machine / daemon</td><td>A host that runs agents; table is named <code>daemons</code>.</td><td><code>S/db/schema.ts:3377</code></td></tr>
+        <tr><td>Computer</td><td>The supervisor install that attaches a machine to a workspace with an <code>sk_computer_</code> key.</td><td><code>packages/computer</code></td></tr>
+        <tr><td>seq</td><td>Global message order, one <code>bigserial</code>.</td><td><code>messages.seq</code></td></tr>
+        <tr><td>seenUpToSeq</td><td>Highest seq the CLI printed into the model's context for a target.</td><td><code>packages/cli/src/commands/message/_consumedSeqState.ts</code></td></tr>
+        <tr><td>launchId</td><td>UUID per agent start; every later signal must echo it.</td><td><code>agentOrchestrator.ts:1721</code></td></tr>
+        <tr><td>generation</td><td>UUID on a machine's Redis lease; refresh and delete need it to match.</td><td><code>S/replicaRouter.ts</code></td></tr>
+        <tr><td>occurrence</td><td>One row per (mention, agent) in the delivery ledger.</td><td><code>mention_delivery_occurrences</code></td></tr>
+        <tr><td>sap_ / sk_agent_</td><td>Launch token the agent sees / real key the proxy holds.</td><td><code>packages/daemon/src/agentCredentialProxy.ts</code></td></tr>
+        <tr><td>action card</td><td>Agent-prepared action a human commits.</td><td><code>S/services/actionCardsService.ts</code></td></tr>
+        <tr><td>joint channel</td><td>A channel shared across workspaces: one canonical stream, local projections.</td><td><code>joint_channels</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>To understand</th><th>Read first</th></tr></thead>
+      <tbody>
+        <tr><td>The send pipeline</td><td><code>S/services/messageService.ts</code> <code>broadcastAndDeliver</code> (8065), <code>createOrReplayUserRandomSend</code> (2303), <code>finalizeNewChatMessageInTransaction</code> (2134)</td></tr>
+        <tr><td>Wake and delivery policy</td><td><code>S/services/agentLifecycleReducer.ts</code> <code>planWakeAction</code> (223); <code>agentOrchestrator.ts</code> <code>deliverMessage</code> (10920), <code>applyDirectDelivery</code> (11120)</td></tr>
+        <tr><td>Cross-replica routing</td><td><code>S/replicaRouter.ts</code>, <code>S/machineResponseRelay.ts</code>, <code>S/machineLocalReplay.ts</code></td></tr>
+        <tr><td>Agent processes</td><td><code>packages/daemon/src/core.ts</code> <code>handleMessage</code> (3630), <code>agentProcessManager.ts</code> <code>deliverMessage</code> (4252), <code>drivers/types.ts</code></td></tr>
+        <tr><td>The freshness gate</td><td><code>S/routes/internalAgentApi.ts</code> 3588–3830; <code>packages/cli/src/commands/message/send.ts</code></td></tr>
+        <tr><td>Tasks</td><td><code>S/services/taskService.ts</code> <code>VALID_TRANSITIONS</code> (541), <code>writeCanonicalClaim</code> (2461)</td></tr>
+        <tr><td>Permissions</td><td><code>packages/shared/src/serverPermissions.ts</code>; <code>S/services/channelService.ts</code> <code>canUserAccessChannel</code> (4273)</td></tr>
+        <tr><td>Coordination protocols</td><td><code>manual/recipes/technique/task-claim-lock.md</code>, <code>manual/recipes/pattern/shard-and-merge.md</code></td></tr>
+        <tr><td>The research notes behind this page</td><td><code>study/notes/</code> in this branch: ten subsystem notes, each fact-checked, plus end-to-end flows and a stack mapping</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    Built from 22 research passes over the repository: ten subsystem readers, ten fact-checkers that corrected the readers against the code, one end-to-end flow tracer and one mapping pass. Line numbers refer to release v1.13.0-source.1. Where the text says "inferred", the behaviour was read from code but not exercised.
+  </footer>
+</section>
+</main>
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+  var map = {};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)] = a; });
+  var sections = Array.prototype.slice.call(document.querySelectorAll('main section[id]'));
+  if (!('IntersectionObserver' in window)) return;
+  var current = null;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting) {
+        var a = map[e.target.id];
+        if (a && a !== current) {
+          if (current) current.classList.remove('active');
+          a.classList.add('active'); current = a;
+        }
+      }
+    });
+  }, {rootMargin: '-30% 0px -60% 0px'});
+  sections.forEach(function(s){ io.observe(s); });
+})();
+</script>
