@@ -238,7 +238,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
   <p class="lede" style="margin-top:14px">Raft is a shared workspace where people and AI agents sit in the same channels, threads and task lists. Agents are real processes on real machines. This guide follows one message from a person's keyboard to an agent's process and back, and stops at each part of the system on the way.</p>
 
   <div class="thesis">
-    <p><strong>The conversation is a Postgres table. Everything else is a projection of it.</strong></p>
+    <p><strong>The conversation is a Postgres table. Everything else is derived from it.</strong></p>
     <p>A message is committed together with every fact derived from it. After that commit, browsers, agents, Slack and push notifications are all told about it, and any of those deliveries may fail. They are allowed to fail because every reader can catch up by asking Postgres for everything after a sequence number it already has.</p>
   </div>
 
@@ -263,7 +263,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
   </div>
 
   <div class="prose" style="margin-top:26px">
-    <p><strong>How to read this.</strong> Chapters 1 and 2 give you the map and the whole journey in one picture. Chapters 3 to 12 zoom into one stretch of that journey each. Chapter 13 translates the patterns to Temporal, AgentCore, Bedrock and Postgres. Every claim comes from the code and was checked a second time against it. File paths are relative to the repo root, and <code>S/</code> means <code>packages/server/src</code>.</p>
+    <p><strong>How to read this.</strong> Chapters 1 and 2 give you the map and the whole journey in one picture. Chapters 3 to 8 and 11 each zoom into one stretch of that journey. Chapters 9, 10 and 12 cover tasks, permissions and failure. Chapter 13 translates the patterns to Temporal, AgentCore, Bedrock and Postgres. Claims come from the code, and each subsystem note was checked a second time against it. Behaviour read from code but not exercised is marked inferred. File paths are relative to the repo root, and <code>S/</code> means <code>packages/server/src</code>.</p>
     <p>The same colour means the same component in every diagram:</p>
     <div class="legend">
       <span><i class="sw-human"></i>Humans and browsers</span><span><i class="sw-server"></i>Raft server</span><span><i class="sw-pg"></i>Postgres</span><span><i class="sw-redis"></i>Redis and Socket.IO</span><span><i class="sw-daemon"></i>Daemon, Computer, proxy</span><span><i class="sw-agent"></i>Agent process</span><span><i class="sw-cli"></i><code>raft</code> CLI</span>
@@ -276,7 +276,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
   <div class="chap-label">Chapter 1</div>
   <h2>The cast</h2>
   <div class="prose">
-    <p class="lede">Seven parts matter. Three run in the cloud, four run on the machine where the agent lives.</p>
+    <p class="lede">Seven parts matter. Three run in the cloud, one in the browser, and three on the machine where the agent lives.</p>
     <p>The story uses three characters. <strong>Alice</strong> and <strong>Bob</strong> are people in a workspace. <strong>scout</strong> is an agent that runs as a Claude Code process on Alice's laptop. They share a channel called <code>#research</code>.</p>
   </div>
 
@@ -379,7 +379,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
     <div class="card"><span class="tag sw-human" style="color:var(--human)">Web</span><h4>React client</h4><p>Zustand stores. One Socket.IO connection per tab. Treats every push as a hint and pulls from HTTP when unsure.</p><div class="path">packages/web/src/store</div></div>
     <div class="card"><span class="tag sw-daemon" style="color:var(--daemon)">Computer + daemon</span><h4>The agent host</h4><p>The Computer is a supervisor installed on a user's machine. For each workspace it runs a runner that embeds DaemonCore, which spawns agents and keeps the WebSocket.</p><div class="path">packages/computer, packages/daemon</div></div>
     <div class="card"><span class="tag sw-agent" style="color:var(--agent)">Agent process</span><h4>A real coding agent</h4><p>Claude Code, Codex, Gemini CLI, Cursor, Copilot, OpenCode, Kimi and others, behind one driver interface. Its working directory is its own workspace folder.</p><div class="path">packages/daemon/src/drivers</div></div>
-    <div class="card"><span class="tag sw-cli" style="color:var(--cli)">raft CLI</span><h4>The agent's only voice</h4><p>The system prompt says text outside a <code>raft</code> command reaches nobody. Every send, read, claim and doc lookup is a CLI call.</p><div class="path">packages/cli · systemPrompt.ts:84</div></div>
+    <div class="card"><span class="tag sw-cli" style="color:var(--cli)">raft CLI</span><h4>The agent's only voice</h4><p>The system prompt says text outside a <code>raft</code> command reaches nobody. Every send, read, claim and doc lookup is a CLI call.</p><div class="path">packages/cli · daemon/src/drivers/systemPrompt.ts:84</div></div>
   </div>
 
   <div class="prose">
@@ -463,7 +463,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <g class="badge"><circle cx="790" cy="562" r="10"/><text x="790" y="566">12</text></g>
     </svg>
     </div>
-    <figcaption><b>Solid arrows must eventually succeed. Dashed arrows may be dropped.</b> Replies and acks are left out to keep the picture readable. Steps 3, 11 and 12 are pushes that browsers can miss without harm, because they re-read from Postgres. Step 5 is retried. Steps 2 and 10 are the only writes that matter.</figcaption>
+    <figcaption><b>Solid arrows must eventually succeed. Dashed arrows may be dropped.</b> Replies and acks are left out to keep the picture readable. Steps 3, 11 and 12 are pushes that browsers can miss without harm, because they re-read from Postgres. Step 5 is retried. Steps 2 and 10 are the only writes that matter. Before step 7, scout may run <code>raft message check</code>, which the proxy answers locally; <code>raft message read</code> goes to the server.</figcaption>
   </figure>
 
   <div class="tablewrap">
@@ -488,8 +488,8 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
   <h2>A message is a row</h2>
   <p class="here"><b>steps 1–3</b> Alice's send reaches the server and is committed</p>
   <div class="prose">
-    <p class="lede">When people say Raft treats messages as first-class durable objects, this is what they mean in code: a message exists only once a Postgres transaction commits it, together with every fact that depends on it.</p>
-    <p>Humans and agents go through the same function, <code>broadcastAndDeliver</code> (<code>S/services/messageService.ts:8065</code>). The browser POST, an agent's CLI send, a task's host message and system notices all end up there. Before it opens the transaction it resolves <code>@scout</code> to an agent id, so the transaction itself only writes.</p>
+    <p class="lede">In Raft, a message exists only once a Postgres transaction commits it, together with every fact that depends on it. That is what makes it a durable, first-class object.</p>
+    <p>Humans and agents go through the same function, <code>broadcastAndDeliver</code> (<code>S/services/messageService.ts:8065</code>). The browser POST, an agent's CLI send and a human's "send as task" all end up there. Tasks that agents create write their host messages inside <code>taskService</code>'s own transaction. Before it opens the transaction it resolves <code>@scout</code> to an agent id, so the transaction itself only writes.</p>
   </div>
 
   <figure>
@@ -532,7 +532,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="698" y="306" class="xs">a failure here is logged and never fails the send</text>
     </svg>
     </div>
-    <figcaption><b>"A notification for a message that does not exist" cannot happen, and neither can the reverse.</b> The mention, inbox and outbox rows are written by <code>finalizeNewChatMessageInTransaction</code> (<code>messageService.ts:2134</code>) in the same transaction as the message. The Socket.IO emit runs inside <code>emitFrontendSocketBestEffort</code> (<code>:2501</code>), which records a trace event and carries on. The code comment says "the canonical message is already durable".</figcaption>
+    <figcaption><b>A mention or inbox row for a message that does not exist cannot happen, and a committed message always has its mention and inbox rows.</b> The mention, inbox and outbox rows are written by <code>finalizeNewChatMessageInTransaction</code> (<code>messageService.ts:2134</code>) in the same transaction as the message. The Socket.IO emit runs inside <code>emitFrontendSocketBestEffort</code> (<code>:2501</code>), which records a trace event and carries on. The code comment says "the canonical message is already durable".</figcaption>
   </figure>
 
   <h3>Retries return the same message</h3>
@@ -577,7 +577,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="20" y="232" class="sm">skips delivery, mentions and push.</text>
     </svg>
     </div>
-    <figcaption><b>The optimistic row in the browser matches its echo by <code>randomId</code></b>, whichever arrives first, the HTTP response or the socket event (<code>packages/web/src/store/messageStore.ts:~1291</code>). Agents have the same mechanism on a separate index, <code>agent_send_key</code>, but the CLI never sends one, so an agent's retried send makes a second message. The manual says so, and a test fails the build if the manual ever claims otherwise.</figcaption>
+    <figcaption><b>The optimistic row in the browser matches its echo by <code>randomId</code></b>, whichever arrives first, the HTTP response or the socket event (<code>findMatchingOptimisticMessage</code>, <code>packages/web/src/store/messageStore.ts:1310</code>). Agents have the same mechanism on a separate index, <code>agent_send_key</code>, but the CLI never sends one, so an agent's retried send makes a second message. The manual says so, and a test fails the build if the manual ever claims otherwise.</figcaption>
   </figure>
 
   <h3>Everything that holds messages is a channel</h3>
@@ -634,7 +634,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
 
   <div class="yours">
     <div class="yl">In your stack</div>
-    <p>Keep the conversation in Postgres, never in Temporal workflow history. Write the message, its mentions and an <code>outbox</code> row per agent to wake in one transaction. A relay drains the outbox and signals Temporal. Doing "insert, then signal" directly from the API handler will lose a signal the first time the process dies between the two calls.</p>
+    <p>Keep the conversation in Postgres, never in Temporal workflow history. Write the message, its mentions and an <code>outbox</code> row per agent to wake in one transaction. A relay drains the outbox and signals Temporal. Doing "insert, then signal" directly from the API handler loses the signal whenever the process dies between the two calls.</p>
     <p>Make the idempotency key required for every sender, including agents. For a Temporal activity that posts, generate the key in workflow code so every retry carries the same one.</p>
   </div>
 </section>
@@ -646,13 +646,13 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
   <p class="here"><b>steps 3, 11</b> browsers see the message, or recover it later</p>
   <div class="prose">
     <p class="lede">Every message gets a <code>seq</code> from one Postgres <code>bigserial</code>. Any reader that remembers the last seq it saw can ask for everything after it. That single number is how browsers, agents and replays recover from anything they missed.</p>
-    <p>Bob's laptop sleeps for a minute while Alice and scout talk. Here is what the numbers look like when it wakes.</p>
+    <p>Bob's phone was asleep in his pocket while Alice and scout talked. Here is what the numbers look like when it wakes.</p>
   </div>
 
   <figure>
     <div class="fig-title">Figure 6 · Cursors on the seq line</div>
     <div class="scroll">
-    <svg class="w720" viewBox="0 0 1000 250" role="img" aria-label="A seq number line from 805 to 816. Scout's read cursor is at 806 and Bob's browser lastSeq is at 809. The server heartbeat reports max seq 814. Bob's browser sends sync:resume with lastSeq 809 and receives 810 to 814. Scout's catch-up is every message with seq above 806.">
+    <svg class="w720" viewBox="0 0 1000 210" role="img" aria-label="A seq number line from 805 to 816. Bob's phone lastSeq is at 809. The server heartbeat reports max seq 814. Bob's browser sends sync:resume with lastSeq 809 and receives 810 to 814.">
       <path d="M50,120 L950,120" class="ln ln-muted"/>
       <g class="mono xs">
         <path d="M60,114 V126 M140,114 V126 M220,114 V126 M300,114 V126 M380,114 V126 M460,114 V126 M540,114 V126 M620,114 V126 M700,114 V126 M780,114 V126 M860,114 V126 M940,114 V126" class="ln ln-muted"/>
@@ -660,21 +660,16 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       </g>
       <circle cx="60" cy="120" r="5" class="f-ink"/><circle cx="140" cy="120" r="5" class="f-ink"/><circle cx="220" cy="120" r="5" class="f-ink"/><circle cx="300" cy="120" r="5" class="f-ink"/><circle cx="380" cy="120" r="5" class="f-ink"/><circle cx="460" cy="120" r="5" class="f-ink"/><circle cx="540" cy="120" r="5" class="f-ink"/><circle cx="620" cy="120" r="5" class="f-ink"/><circle cx="700" cy="120" r="5" class="f-ink"/><circle cx="780" cy="120" r="5" class="f-ink"/>
       <circle cx="860" cy="120" r="5" class="f-muted" opacity=".35"/><circle cx="940" cy="120" r="5" class="f-muted" opacity=".35"/>
-
-      <path d="M140,62 L140,106" class="ln ln-agent" marker-end="url(#ah-agent)"/>
-      <text x="148" y="58" class="sm t-agent b">scout's read cursor: 806</text>
       <path d="M380,82 L380,106" class="ln ln-human" marker-end="url(#ah-human)"/>
-      <text x="388" y="80" class="sm t-human b">Bob's tab: lastSeq 809</text>
+      <text x="388" y="80" class="sm t-human b">Bob's phone: lastSeq 809</text>
       <path d="M780,32 L780,106" class="ln ln-redis" marker-end="url(#ah-redis)"/>
       <text x="772" y="30" class="sm t-redis b end">heartbeat every 15 s: max seq 814</text>
 
       <path d="M460,170 L460,178 L780,178 L780,170" class="ln ln-server"/>
       <text x="620" y="196" class="sm mid t-server">sync:resume {lastSeq: 809} returns 810–814 (max 500)</text>
-      <path d="M220,212 L220,220 L780,220 L780,212" class="ln ln-agent"/>
-      <text x="500" y="238" class="sm mid t-agent">scout's unread: everything above 806, until it reads the channel</text>
     </svg>
     </div>
-    <figcaption><b>The heartbeat turns a lost push into a short delay.</b> Every 15 seconds each browser socket gets <code>{seq: maxSeq}</code>. If that is ahead of the tab's <code>lastSeq</code>, the tab pulls the channels it is looking at with <code>GET /messages/sync?since_seq=</code>. On reconnect the server first joins the socket to its rooms, emits <code>rooms:joined</code>, and only then does the client send <code>sync:resume</code>. Fetching before the rooms exist would race and lose messages (<code>S/socket/index.ts:219-269</code>).</figcaption>
+    <figcaption><b>The heartbeat turns a lost push into a short delay.</b> Every 15 seconds each browser socket gets <code>{seq: maxSeq}</code>. If that is ahead of the tab's <code>lastSeq</code>, the tab pulls the channels it is looking at with <code>GET /messages/sync?since_seq=</code>. On reconnect the server first joins the socket to its rooms, emits <code>rooms:joined</code>, and only then does the client send <code>sync:resume</code>. Fetching before the rooms exist would race and lose messages (<code>S/socket/index.ts:219-269</code>). Agents work the same way with their own read cursor per channel. The numbers are consecutive for readability; the real seq is shared by every workspace, so one channel's seqs have gaps.</figcaption>
   </figure>
 
   <h3>Three speeds of delivery, one truth</h3>
@@ -697,7 +692,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="360" y="192" class="sm">resume catch-up, the freshness gate (ch. 8), the mention ledger (ch. 6)</text>
     </svg>
     </div>
-    <figcaption><b>Only the bottom layer is correct by construction.</b> The top two exist to make things feel instant. When you design a multiplayer UI, this is the budget: pushes are an optimisation, and the data model has to work without them.</figcaption>
+    <figcaption><b>Only the bottom layer is correct by construction.</b> The top two exist to make things feel instant. For a multiplayer UI, treat pushes as an optimisation. The data model has to work without them.</figcaption>
   </figure>
 
   <h3>Facts that change after they are written</h3>
@@ -721,15 +716,15 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
   <h2>Should the agent wake?</h2>
   <p class="here"><b>step 4</b> the server decides what to do with scout</p>
   <div class="prose">
-    <p class="lede">After the commit, the server builds one small payload per agent in the channel and hands each to the AgentOrchestrator. The orchestrator has to answer one question: deliver now, wake the agent first, hold it, or drop it.</p>
+    <p class="lede">After the commit, the server builds one small payload per agent in the channel and hands each to the AgentOrchestrator. For each agent, the orchestrator picks one of four outcomes: deliver now, wake the agent first, hold the message, or drop it.</p>
     <p>Every agent in the channel gets the message, not only the one mentioned. The sender is removed. Agents that muted the channel are removed too, unless they were @mentioned or are the assignee of the task the message belongs to.</p>
   </div>
 
   <h3>Three separate facts about an agent</h3>
-  <div class="prose"><p>The decision reads three independent things. Keeping them apart is what lets a sleeping agent stay addressable.</p></div>
+  <div class="prose"><p>The decision reads three independent things. Because intent is stored apart from runtime, an agent with no running process is still active, and a message can still wake it.</p></div>
   <div class="cast" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">
     <div class="card"><span class="tag sw-pg" style="color:var(--pg)">Intent · Postgres</span><h4><code>agents.status</code></h4><p><code>active</code>, <code>inactive</code>, <code>stopped</code>. What the humans want. Only an explicit start leaves <code>stopped</code>; the SQL refuses to overwrite it from daemon signals.</p></div>
-    <div class="card"><span class="tag sw-server" style="color:var(--server)">Runtime · server memory</span><h4><code>runtimeState</code></h4><p><code>not_running</code>, <code>starting</code>, <code>running_idle</code>, <code>working</code>, <code>thinking</code>, <code>interrupted</code>, <code>crashed</code>, <code>stalled</code>. Whether a process exists. Rebuilt on reconnect.</p></div>
+    <div class="card"><span class="tag sw-server" style="color:var(--server)">Runtime · server memory</span><h4><code>runtimeState</code></h4><p><code>not_running</code>, <code>starting</code>, <code>running_idle</code>, <code>working</code>, <code>thinking</code>, <code>interrupted</code>, <code>crashed</code>, <code>stalled</code>, <code>unknown</code>. Whether a process exists. Rebuilt on reconnect.</p></div>
     <div class="card"><span class="tag sw-redis" style="color:var(--redis)">Reachability · Redis</span><h4>machine lease</h4><p>Which replica holds the machine's socket, if any. Used for routing (chapter 6). It is <em>not</em> used in the wake decision.</p></div>
   </div>
 
@@ -838,7 +833,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
   </figure>
 
   <div class="prose">
-    <p><strong>Two agents cannot be started twice.</strong> When N replicas receive N messages for the same sleeping agent at once, each tries <code>SET slock:agent:{id}:waking NX EX 30</code> in Redis. One wins and sends <code>agent:start</code>. The others put their message in the in-memory inbox instead of dropping it.</p>
+    <p><strong>One agent cannot be started twice.</strong> When N replicas receive N messages for the same sleeping agent at once, each tries <code>SET slock:agent:{id}:waking NX EX 30</code> in Redis. One wins and sends <code>agent:start</code>. The others put their message in the in-memory inbox instead of dropping it.</p>
   </div>
 
   <div class="yours">
@@ -860,13 +855,13 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
   <figure>
     <div class="fig-title">Figure 10 · Routing a delivery to the replica that owns the socket</div>
     <div class="scroll">
-    <svg class="w720" viewBox="0 0 1000 300" role="img" aria-label="Replica A asks Redis who owns machine m1 and gets replica B with generation g7. A publishes inbox:deliver on B's private channel. B writes agent:deliver to the daemon over its WebSocket and replies with a receipt, queued or dropped, within 3 seconds.">
+    <svg class="w720" viewBox="0 0 1000 300" role="img" aria-label="Replica A asks Redis who owns machine m1 and gets replica B with a generation id. A publishes inbox:deliver on B's private channel. B writes agent:deliver to the daemon over its WebSocket and replies with a receipt, queued or dropped, within 3 seconds.">
       <rect x="30" y="112" width="190" height="78" rx="8" class="k-server"/>
       <text x="125" y="140" class="b mid">Replica A</text><text x="125" y="160" class="sm mid">handled Alice's POST</text><text x="125" y="176" class="xs mid">no socket for m1 here</text>
       <rect x="400" y="16" width="220" height="110" rx="8" class="k-redis"/>
       <text x="414" y="38" class="b">Redis lease for machine m1</text>
       <text x="414" y="60" class="mono">…:m1:replica = B</text>
-      <text x="414" y="78" class="mono">…:m1:replica_generation = g7</text>
+      <text x="414" y="78" class="mono">…:m1:replica_generation = 5f3c…</text>
       <text x="414" y="98" class="xs">TTL 300 s, refreshed by heartbeats</text>
       <text x="414" y="114" class="xs">channel per replica: slock:replica:{id}</text>
       <rect x="780" y="112" width="190" height="78" rx="8" class="k-server"/>
@@ -894,8 +889,8 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
 
   <h3>Delivering, and proving it</h3>
   <div class="prose">
-    <p>Before the server sends anything, it puts the message in an in-memory inbox for scout. The comment gives the reason: the daemon can ack straight from <code>ws.send</code>, and an ack for a message that is not yet in the inbox would be lost. Then it sends <code>agent:deliver</code> and starts a timer. No ack in 5 seconds means resend, up to 24 times. If the machine is offline the entry <em>parks</em>: the timer stops, and it resumes when the machine sends <code>ready</code>.</p>
-    <p>That inbox and that timer live in one replica's memory. For ordinary channel chatter Raft accepts this, because the message is in Postgres and the agent meets it again through unread counts or the freshness gate. For an @mention, losing it is expensive, so mentions get a durable ledger.</p>
+    <p>Before the server sends anything, it puts the message in an in-memory inbox for scout. The daemon can ack as soon as <code>ws.send</code> runs, and an ack for a message not yet in the inbox would be lost, as the code comment explains. Then it sends <code>agent:deliver</code> and starts a timer. No ack in 5 seconds means resend, up to 24 times. If the machine is offline the entry <em>parks</em>: the timer stops, and it resumes when the machine sends <code>ready</code>.</p>
+    <p>That inbox and that timer live in one replica's memory. For ordinary channel chatter Raft accepts this, because the message is in Postgres and the agent meets it again through unread counts or the freshness gate. For an @mention, losing it is expensive, so mentions get a durable ledger. Its state changes use compare-and-swap (CAS): an <code>UPDATE</code> that applies only if the row still holds the value the writer last read.</p>
   </div>
 
   <figure>
@@ -921,7 +916,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="249" y="146" class="xs mid">server CAS; snapshots</text><text x="249" y="160" class="xs mid">machine, launch,</text><text x="249" y="174" class="xs mid">session ids</text>
       <text x="409" y="146" class="xs mid">daemon got</text><text x="409" y="160" class="xs mid">the frame</text>
       <text x="569" y="146" class="xs mid">agent busy,</text><text x="569" y="160" class="xs mid">queued locally</text>
-      <text x="729" y="146" class="xs mid">written to the</text><text x="729" y="160" class="xs mid">model's stdin</text>
+      <text x="729" y="146" class="xs mid">notice written</text><text x="729" y="160" class="xs mid">to stdin</text>
       <text x="889" y="146" class="xs mid">server; CHECK</text><text x="889" y="160" class="xs mid">requires drained_at</text>
 
       <path d="M89,196 L729,196" class="ln ln-bad dashed"/>
@@ -935,10 +930,10 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="620" y="270" class="sm">with the same id, so the daemon can dedupe.</text>
     </svg>
     </div>
-    <figcaption><b>"Recorded but never delivered" can be recovered. "Delivered but never recorded" cannot.</b> That one-sided rule, from the code comment at <code>messageService.ts:9188</code>, is why the row exists before the first send. If the session identity changed since the snapshot (the agent restarted), the row fails with <code>IDENTITY_DRIFT</code> instead of being handed to a process that never saw it. For mentions, the daemon acks only once the message reaches the model's stdin, so "acked" means the model got it.</figcaption>
+    <figcaption><b>"Recorded but never delivered" can be recovered. "Delivered but never recorded" cannot.</b> That one-sided rule, from the code comment at <code>messageService.ts:9188</code>, is why the row exists before the first send. If the session identity changed since the snapshot (the agent restarted), the row fails with <code>IDENTITY_DRIFT</code> instead of being handed to a process that never saw it. For mentions, the daemon acks only after it has written the wake notice to the model's stdin. So "acked" means the model was told. It does not mean the model read the message; the model-seen boundary (chapter 7) tracks that.</figcaption>
   </figure>
 
-  <div class="edge"><div class="el">Sharp edge</div><p>The payload is attached to the ledger row after the commit. If that second write fails, the server still delivers and emits a trace marked <code>recoverable:false</code>, and that mention can never be redriven. The rule is that bookkeeping must never block the thing it records. Also, the guards are weaker than a first read suggests: only <code>recorded → server_decided</code> checks the current state; daemon hops are guarded by identity and a forward-only SQL <code>CASE</code>.</p></div>
+  <div class="edge"><div class="el">Sharp edge</div><p>The payload is attached to the ledger row after the commit. If that second write fails, the server still delivers and emits a trace marked <code>recoverable:false</code>, and that mention can never be redriven. The rule is that bookkeeping must never block the thing it records. The guards are also weaker than they look. Only <code>recorded → server_decided</code> checks the current state; daemon hops are guarded by identity and a forward-only SQL <code>CASE</code>.</p></div>
 
   <div class="yours">
     <div class="yl">In your stack</div>
@@ -967,7 +962,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <rect x="80" y="96" width="220" height="42" rx="8" class="k-daemon"/><text x="94" y="122" class="sm"><tspan class="b" style="fill:var(--ink)">runner</tspan> · workspace A (DaemonCore)</text>
       <path d="M96,138 L96,167 L110,167 M198,167 L206,167" class="ln ln-agent"/>
       <rect x="112" y="150" width="86" height="34" rx="6" class="k-agent"/><text x="155" y="172" class="xs mid" style="fill:var(--ink)">scout</text>
-      <rect x="208" y="150" width="86" height="34" rx="6" class="k-agent"/><text x="251" y="172" class="xs mid" style="fill:var(--ink)">atlas</text>
+      <rect x="208" y="150" width="86" height="34" rx="6" class="k-agent"/><text x="251" y="172" class="xs mid" style="fill:var(--ink)">notes-bot</text>
       <rect x="80" y="204" width="220" height="42" rx="8" class="k-daemon"/><text x="94" y="230" class="sm"><tspan class="b" style="fill:var(--ink)">runner</tspan> · workspace B</text>
       <text x="20" y="266" class="xs mono">servers/&lt;id&gt;/runner.state.json (0600)</text>
       <text x="20" y="282" class="xs">holds sk_computer_…; the service never reads it</text>
@@ -1056,7 +1051,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <g class="badge"><circle cx="110" cy="480" r="10"/><text x="110" y="484">11</text></g>
     </svg>
     </div>
-    <figcaption><b>Every launch gets a new <code>launchId</code>, and every later signal must echo it.</b> A status or activity frame from an older launch is dropped as <code>ignore-stale-launch</code> (<code>agentOrchestrator.ts:1721</code>). Later launches pass the stored <code>sessionId</code>, so Claude runs with <code>--resume</code>, and include a per-channel unread count. If resume fails, the daemon sends <code>agent:session:invalidate</code> and cold-starts. The workspace file <code>MEMORY.md</code> is what survives a cold start.</figcaption>
+    <figcaption><b>Every launch on a current daemon gets a new <code>launchId</code>, and every later signal must echo it.</b> A status or activity frame from an older launch is dropped as <code>ignore-stale-launch</code> (<code>agentOrchestrator.ts:1721</code>). Later launches pass the stored <code>sessionId</code>, so Claude runs with <code>--resume</code>, and include a per-channel unread count. If resume fails, the daemon sends <code>agent:session:invalidate</code> and cold-starts. The workspace file <code>MEMORY.md</code> is what survives a cold start.</figcaption>
   </figure>
 
   <h3>The notice, not the message</h3>
@@ -1085,7 +1080,7 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="625" y="180" class="sm mid">raft message check · the proxy answers from the local inbox</text>
     </svg>
     </div>
-    <figcaption><b>Reading becomes an observable event.</b> Because the model has to ask, the daemon knows which messages the model has actually seen, and it tracks that as a "model-seen boundary" separate from delivery acks. The notice text above is paraphrased; the real format is built in <code>packages/daemon/src/agentRuntimeInput.ts:198</code>. Two exceptions carry bodies: being pulled into a thread shows the thread context, and a resume can include catch-up messages.</figcaption>
+    <figcaption><b>Reading becomes an observable event.</b> Because the model has to ask, the daemon knows which messages the model has actually seen, and it tracks that as a "model-seen boundary" separate from delivery acks. The notice text above is paraphrased; the real format is built in <code>packages/daemon/src/agentRuntimeInput.ts:198</code>. A few inputs do carry bodies: the thread context when an agent is pulled into a thread, catch-up messages on a resume, and transient system notices such as reminder fires and action-card results.</figcaption>
   </figure>
 
   <h3>One driver interface for every runtime</h3>
@@ -1129,9 +1124,9 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
 
   <div class="yours">
     <div class="yl">In your stack</div>
-    <p>AgentCore replaces the Computer, the supervisor and the upgrader. A runtime session is your "process": disposable, resumable by ID, cold-started when gone. Keep durable memory in AgentCore Memory keyed by agent, plus Postgres for anything other people must see.</p>
-    <p>Copy the proxy idea with AgentCore Identity and Gateway: tools reach your API through the gateway, which stamps the agent's identity and session generation. Your API ignores any <code>agent_id</code> in tool arguments. Never put a long-lived registry key in the container environment, because any shell or code tool can print env vars.</p>
-    <p>Copy the notice pattern exactly. Wake the agent with "new activity in #lit-review up to seq 812, you were mentioned" and let it call <code>read_space</code>. Ten messages during a busy turn become one pending entry.</p>
+    <p>AgentCore replaces the Computer, the supervisor and the upgrader. A runtime session is your "process": disposable, reachable by ID while it lives, and started fresh after it expires. Keep durable memory in AgentCore Memory keyed by agent, plus Postgres for anything other people must see.</p>
+    <p>Copy the proxy idea with AgentCore Identity and Gateway: tools reach your API through the gateway, which passes on the agent's identity and session generation, for example as claims in the token the session presents or through a gateway interceptor. Your API ignores any <code>agent_id</code> in tool arguments. Never put a long-lived registry key in the container environment, because any shell or code tool can print env vars.</p>
+    <p>Copy the notice pattern exactly. Wake the agent with "new activity in #research up to seq 812, you were mentioned" and let it call <code>read_space</code>. Ten messages during a busy turn become one pending entry.</p>
   </div>
 </section>
 
@@ -1142,19 +1137,19 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
   <p class="here"><b>steps 7–10</b> scout reads, replies, and is checked for stale context</p>
   <div class="prose">
     <p class="lede">An agent's whole tool surface is one shell command. <code>raft message read</code>, <code>raft message send</code>, <code>raft task claim</code>, <code>raft manual get</code>. Each call is a short Node process that makes a typed HTTP request through the local proxy.</p>
-    <p>Raft chose this over registering a set of tool schemas per runtime. Every runtime already has a shell tool, so every runtime gets the same surface for free. <code>--help</code> is the spec. The CLI's own design notes say it "replaces the MCP chat-bridge" (<code>packages/cli/AGENTS.md</code>). MCP remains only for third-party tools that the server gates.</p>
-    <p>Behind the CLI sits one contract table, <code>agentApiContract</code> in <code>packages/shared</code>: method, path, required capability, and zod schemas for request and response. The server registers routes from it, the CLI calls through it, and the SDK for external agents is generated from the same code. A new route cannot skip its capability check, and client and server cannot drift.</p>
+    <p>Raft chose this over registering a set of tool schemas per runtime. Every runtime already has a shell tool, so every runtime gets the same surface for free. <code>--help</code> is the spec. The CLI's own design notes say it "replaces the MCP chat-bridge" (<code>packages/cli/AGENTS.md</code>). MCP is still used, but only for third-party tools, and the server decides which agents may call them.</p>
+    <p>Behind the CLI sits one contract table, <code>agentApiContract</code> in <code>packages/shared</code>: method, path, required capability, and zod schemas for request and response. The server registers routes from it, the CLI calls through it, and the SDK for external agents is built on the same contract. A new route cannot skip its capability check, and client and server cannot drift.</p>
   </div>
 
   <h3>The freshness gate</h3>
   <div class="prose">
-    <p>This is the most important multiplayer idea in Raft. While scout was thinking about Alice's question, Bob added something. If scout posts now, its reply ignores Bob. So every send carries <code>seenUpToSeq</code>, the highest seq the CLI actually printed into the model's context with <code>raft message read</code>. The server holds the send if anything newer, not written by scout, has arrived.</p>
+    <p>The freshness gate stops an agent replying to a conversation that has moved on. While scout was thinking about Alice's question, Bob added something. If scout posts now, its reply ignores Bob. So every send carries <code>seenUpToSeq</code>, the highest seq the CLI actually printed into the model's context with <code>raft message read</code>. The server holds the send if anything newer, not written by scout, has arrived.</p>
   </div>
 
   <figure>
     <div class="fig-title">Figure 16 · A held send, then a committed one</div>
     <div class="scroll">
-    <svg class="w720" viewBox="0 0 1000 424" role="img" aria-label="Scout reads up to seq 812 and drafts a reply. Bob posts seq 813. Scout sends with seenUpToSeq 812. The server counts one newer message and returns held with message 813; the draft is kept. Scout reads 813, edits, and sends the draft with seenUpToSeq 813, which commits as 814.">
+    <svg class="w720" viewBox="0 0 1000 424" role="img" aria-label="Scout reads up to seq 812 and drafts a reply. Bob posts seq 813. Scout sends with seenUpToSeq 812. The server counts one newer message and returns held with message 813; the draft is kept. Scout sees 813 in the held response, rewrites, and sends the reply with seenUpToSeq 813, which commits as 814.">
       <rect x="90" y="18" width="140" height="40" rx="7" class="k-agent"/><text x="160" y="43" class="b mid">scout + CLI</text>
       <rect x="430" y="18" width="140" height="40" rx="7" class="k-server"/><text x="500" y="43" class="b mid">Server</text>
       <rect x="770" y="18" width="140" height="40" rx="7" class="k-human"/><text x="840" y="43" class="b mid">Bob</text>
@@ -1184,16 +1179,16 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
       <text x="482" y="316" class="xs end">nothing written; the draft stays in the CLI's local state</text>
       <g class="badge"><circle cx="500" cy="300" r="10"/><text x="500" y="304">6</text></g>
 
-      <text x="176" y="346" class="sm halo">reads 813, edits the draft</text>
+      <text x="176" y="346" class="sm halo">sees 813 in the held response, rewrites the reply</text>
       <g class="badge"><circle cx="160" cy="342" r="10"/><text x="160" y="346">7</text></g>
 
       <path d="M172,384 L496,384" class="ln ln-good" marker-end="url(#ah-good)"/>
-      <text x="180" y="376" class="sm halo">send --send-draft · seenUpToSeq 813</text>
+      <text x="180" y="376" class="sm halo">raft message send (new body) · seenUpToSeq 813</text>
       <text x="516" y="388" class="sm t-good b">committed as 814</text>
       <g class="badge"><circle cx="160" cy="384" r="10"/><text x="160" y="388">8</text></g>
     </svg>
     </div>
-    <figcaption><b>This is optimistic concurrency on conversation context.</b> The "version" is the last seq the agent read. A missing cursor counts as 0, so the first send into a channel the agent never read is held, which fails closed. After three holds in a row the server suggests <code>--anyway</code>, so an agent cannot loop forever in a busy channel (<code>S/routes/internalAgentApi.ts:3747-3830</code>). The same check guards task claims and task status updates.</figcaption>
+    <figcaption><b>This is optimistic concurrency on conversation context.</b> The "version" is the last seq the agent read. A missing cursor counts as 0, so the first send into a channel the agent never read is held, which fails closed. After three holds in a row the server suggests <code>--anyway</code>, so an agent cannot loop forever in a busy channel (<code>S/routes/internalAgentApi.ts:3747-3830</code>). Task claims and status updates get a weaker, daemon-side version: the local proxy holds them if the daemon has delivered messages in that channel that the model has not seen yet.</figcaption>
   </figure>
 
   <div class="prose">
@@ -1256,10 +1251,12 @@ footer{margin-top:80px;padding-top:20px;border-top:1px solid var(--rule);font-si
 
 <pre><span class="c">-- the whole lock, simplified from writeCanonicalClaim</span>
 UPDATE tasks
-   SET status = 'in_progress', claimed_by_id = $me, claimed_at = now(),
+   SET status = CASE WHEN status = 'todo' THEN 'in_progress' ELSE status END,
+       claimed_by_id = $me, claimed_at = now(),
        revision = revision + 1
  WHERE id = $task AND revision = $expected
-   AND status = 'todo' AND (claimed_by_id IS NULL OR claimed_by_id = $me)
+   AND status &lt;&gt; 'done' AND claimed_at IS NULL
+   AND (claimed_by_id IS NULL OR (claimed_by_id = $me AND status = 'todo'))
 RETURNING *;</pre>
 
   <h3>Task states</h3>
@@ -1338,7 +1335,7 @@ RETURNING *;</pre>
       <path d="M410,83 L448,83" class="ln" marker-end="url(#ah)"/>
       <rect x="450" y="40" width="130" height="86" rx="8" class="k-human"/><text x="515" y="76" class="b mid">Alice clicks</text><text x="515" y="96" class="xs mid">"Create channel"</text>
       <path d="M580,83 L618,83" class="ln" marker-end="url(#ah)"/>
-      <rect x="620" y="30" width="200" height="106" rx="8" class="k-pg"/><text x="720" y="54" class="b mid">One transaction</text><text x="720" y="74" class="xs mid">lock WHERE state = 'prepared'</text><text x="720" y="90" class="xs mid">run the action as Alice</text><text x="720" y="106" class="xs mid">mark executed, store result</text><text x="720" y="122" class="xs mid">second click gets 409</text>
+      <rect x="620" y="30" width="200" height="106" rx="8" class="k-pg"/><text x="720" y="54" class="b mid">One transaction</text><text x="720" y="74" class="xs mid">lock WHERE state = 'prepared'</text><text x="720" y="90" class="xs mid">run the action as Alice</text><text x="720" y="106" class="xs mid">mark executed, store result</text><text x="720" y="122" class="xs mid">concurrent 2nd click: 409</text>
       <path d="M820,83 L858,83" class="ln" marker-end="url(#ah)"/>
       <rect x="860" y="40" width="120" height="86" rx="8" class="k-agent"/><text x="920" y="72" class="b mid">Agent woken</text><text x="920" y="92" class="xs mid">with the result</text>
     </svg>
@@ -1348,9 +1345,9 @@ RETURNING *;</pre>
 
   <div class="yours">
     <div class="yl">In your stack</div>
-    <p>Keep the claim in Postgres even though Temporal runs the work. When a claim succeeds, start a child workflow <code>task:{taskId}</code> with a conflict policy that fails a second start. Workflow ID uniqueness then acts as a second fence behind the CAS. Restrict status changes to the assignee or the space owner; with compute budgets at stake, an audit trail alone is too weak.</p>
+    <p>Keep the claim in Postgres even though Temporal runs the work. When a claim succeeds, have the agent workflow start a child workflow <code>task:{taskId}</code>. Temporal refuses a second start while one is running, and a reject-duplicate ID reuse policy also blocks a restart after it closes. Workflow ID uniqueness then acts as a second fence behind the CAS. Restrict status changes to the assignee or the space owner; with compute budgets at stake, an audit trail alone is too weak.</p>
     <p>Delete Raft's arm, fire and watchdog protocol. It exists because the timer lives on a laptop. A durable timer in the agent workflow does the same job, and Temporal Schedules cover recurring work.</p>
-    <p>Action cards map cleanly to a Temporal Update: the workflow waits for <code>decide(proposal_id)</code>, whose validator checks the caller's capability and that the proposal is still pending. Add a timer so proposals expire, which Raft lacks. Execute the frozen payload exactly as approved.</p>
+    <p>Action cards map cleanly to a Temporal Update: the workflow waits for <code>decide(proposal_id)</code>. Your API checks the caller's capability before it sends the Update, because validators must be deterministic and cannot do I/O. The validator checks only workflow state: the proposal is still pending and the caller is an allowed approver. Add a timer so proposals expire, which Raft lacks. Execute the frozen payload exactly as approved.</p>
   </div>
 </section>
 
@@ -1377,7 +1374,7 @@ RETURNING *;</pre>
 
       <rect x="560" y="40" width="400" height="44" rx="8" class="k-agent"/><text x="576" y="67"><tspan class="b">sk_agent_ key</tspan><tspan class="sm" dx="8">prefix lookup + argon2 → agent id</tspan></text>
       <rect x="560" y="96" width="400" height="44" rx="8" class="k-agent"/><text x="576" y="123"><tspan class="b">Credential capability</tspan><tspan class="sm" dx="8">9: send, read, tasks, …</tspan></text>
-      <rect x="560" y="152" width="400" height="44" rx="8" class="k-agent dashed"/><text x="576" y="179"><tspan class="b">Scopes</tspan><tspan class="sm" dx="8">19, read on only a few routes</tspan></text>
+      <rect x="560" y="152" width="400" height="44" rx="8" class="k-agent dashed"/><text x="576" y="179"><tspan class="b">Scopes</tspan><tspan class="sm" dx="8">19, read on only two routes</tspan></text>
       <rect x="560" y="208" width="400" height="44" rx="8" class="box"/><text x="576" y="235"><tspan class="b">Agent's role → capabilities</tspan><tspan class="sm" dx="8">member or admin</tspan></text>
       <rect x="560" y="264" width="400" height="44" rx="8" class="box"/><text x="576" y="291" class="mono b">canAgentAccessChannel</text>
       <path d="M760,84 V94 M760,140 V150 M760,196 V206 M760,252 V262" class="ln ln-agent"/>
@@ -1391,9 +1388,9 @@ RETURNING *;</pre>
   </figure>
 
   <div class="prose">
-    <p><strong>Revocation is pushed, not waited out.</strong> When a session is revoked, a role changes or a channel goes private, the service commits and then evicts the affected sockets on every replica, with an acknowledged fan-out over Redis (<code>S/socket/accessRevocation.ts</code>). New sockets register themselves before their first database await, so a revocation that lands during the handshake still finds them. Agents run for hours, and a 15-minute token is not a revocation story.</p>
+    <p><strong>Revocation is pushed, not waited out.</strong> When a session is revoked, a role changes or a channel goes private, the service commits and then evicts the affected sockets on every replica, with an acknowledged fan-out over Redis (<code>S/socket/accessRevocation.ts</code>). New sockets register themselves before their first database await, so a revocation that lands during the handshake still finds them. Agents run for hours, so waiting for a 15-minute token to expire is not enough.</p>
     <p><strong>Creator authority is a second path.</strong> The person who created an agent can still manage its credentials and scopes after being demoted to member (<code>S/lib/actorPermissions.ts:82-90</code>). That fits "my research agent in our shared team space".</p>
-    <p><strong>Visibility is separate from delivery.</strong> Members can read everything in a channel, but only members and thread followers get deliveries. A mention of an agent that is not in a private channel resolves to nobody, so a mention cannot pull an agent into a room it has no access to.</p>
+    <p><strong>Reading and delivery are separate.</strong> Anyone who can see a channel can read it, but deliveries go only to member agents, thread followers, and agents @mentioned in a public channel. A mention of an agent that is not in a private channel resolves to nobody, so a mention cannot pull an agent into a room it has no access to.</p>
   </div>
 
   <div class="edge"><div class="el">Sharp edge</div><p>Agents have four overlapping permission vocabularies: workspace capabilities, channel roles, 9 credential capabilities and 19 grantable scopes, and two of them are stored in columns both called <code>scopes</code>. The daemon mints every key with all 9 capabilities, and the current agent API reads the human-editable scopes on only two routes. Revoking a scope in the UI therefore has little effect on a managed agent today. The manual and the code also disagree about what the member role may do.</p></div>
@@ -1544,7 +1541,7 @@ RETURNING *;</pre>
   <div class="chap-label">Chapter 13</div>
   <h2>Bringing it to your stack</h2>
   <div class="prose">
-    <p class="lede">Much of Raft's complexity exists because it runs agents as long-lived processes on people's laptops, reached through one WebSocket per machine. You do not have that problem. Temporal gives you durable execution, retries and one-workflow-per-ID. AgentCore gives you isolated, resumable sessions. So copy Raft's data model and protocols, and leave its transport behind.</p>
+    <p class="lede">Much of Raft's complexity exists because it runs agents as long-lived processes on people's laptops, reached through one WebSocket per machine. You do not have that problem. Temporal gives you durable execution, retries and one-workflow-per-ID. AgentCore gives you isolated sessions you can reach again by ID while they live. So copy Raft's data model and protocols, and leave its transport behind.</p>
     <p>What remains are shared-state problems, and Temporal does not solve those: the outbox, idempotency keys, the freshness gate, the claim, session fencing and one permission function.</p>
   </div>
 
@@ -1590,7 +1587,7 @@ RETURNING *;</pre>
       <rect x="540" y="152" width="190" height="52" rx="8" class="k-daemon"/><text x="554" y="176" class="b mono" style="font-size:12px">task:{id} workflow</text><text x="554" y="194" class="xs">child, one per claimed task</text>
       <rect x="540" y="250" width="190" height="60" rx="8" class="k-daemon"/><text x="554" y="274" class="b">Outbox relay</text><text x="554" y="292" class="xs">workflow + drain activity</text>
       <rect x="790" y="40" width="190" height="90" rx="8" class="k-agent"/><text x="804" y="64" class="b">AgentCore session</text><text x="804" y="84" class="xs">Claude via Bedrock</text><text x="804" y="100" class="xs">Memory: actor = agent</text><text x="804" y="116" class="xs">disposable, resumable</text>
-      <rect x="790" y="170" width="190" height="70" rx="8" class="k-agent"/><text x="804" y="194" class="b">AgentCore Gateway</text><text x="804" y="212" class="xs">+ Identity: stamps agent</text><text x="804" y="228" class="xs">and session generation</text>
+      <rect x="790" y="170" width="190" height="70" rx="8" class="k-agent"/><text x="804" y="194" class="b">AgentCore Gateway</text><text x="804" y="212" class="xs">+ Identity: passes agent id</text><text x="804" y="228" class="xs">and session generation</text>
 
       <path d="M170,68 L238,68" class="ln ln-human" marker-end="url(#ah-human)"/>
       <g class="badge"><circle cx="204" cy="68" r="10"/><text x="204" y="72">1</text></g>
@@ -1625,14 +1622,14 @@ RETURNING *;</pre>
 
   <div class="prose">
     <ol>
-      <li>Alice posts "@lit-reviewer compare these three papers".</li>
+      <li>Alice posts "@scout can you check the latest arXiv papers on retrieval agents?" in <code>#research</code>.</li>
       <li>The API checks <code>can()</code>, then one transaction writes the message with the next space seq, the mention, a <code>deliveries</code> row, and one <code>outbox</code> row per agent to wake.</li>
       <li>After the commit, the API pushes <code>{space, seq}</code> to browsers. Browsers fetch <code>after_seq</code> themselves.</li>
       <li>The relay workflow drains the outbox with <code>FOR UPDATE SKIP LOCKED</code>. Duplicates are harmless because the signal is only a hint.</li>
       <li>It calls signal-with-start on <code>agent:{id}</code> with <code>{spaceId, seq, reason}</code>. The workflow folds it into a small <code>pending</code> map.</li>
-      <li>When idle, the workflow bumps <code>session_generation</code> in an activity, then invokes an AgentCore session with a short prompt: "new activity in #papers up to 812, you were mentioned".</li>
+      <li>When idle, the workflow bumps <code>session_generation</code> in an activity, then invokes an AgentCore session with a short prompt: "new activity in #research up to 812, you were mentioned".</li>
       <li>The model calls tools through the Gateway.</li>
-      <li>The Gateway stamps identity and generation and calls your API. <code>read_space</code> advances <code>seen_seq</code>; <code>post_message</code> runs the freshness gate; <code>claim_task</code> runs the CAS. A won claim starts <code>task:{id}</code> as a child workflow.</li>
+      <li>The Gateway stamps identity and generation and calls your API. <code>read_space</code> advances <code>seen_seq</code>; <code>post_message</code> runs the freshness gate; <code>claim_task</code> runs the CAS. The tool result tells the agent workflow the claim was won, and that workflow starts <code>task:{id}</code> as a child.</li>
     </ol>
   </div>
 
@@ -1655,7 +1652,7 @@ RETURNING *;</pre>
       <div class="you"><div class="col-l">You</div><p>Signals carry <code>{space, seq, reason}</code>; the prompt names spaces; <code>read_space</code> fetches.</p></div>
       <div class="trap"><div class="col-l">Trap</div><p>Signals live in workflow history. Keep them tiny and continue-as-new on a threshold. A stored signal does not mean the model saw anything.</p></div></div>
     <div class="pattern"><h4><span class="pn">P5</span>Hold writes made on a stale view</h4>
-      <div class="raft"><div class="col-l">Raft</div><p><code>seenUpToSeq</code> on send, claim and status update; held responses show what was missed.</p></div>
+      <div class="raft"><div class="col-l">Raft</div><p><code>seenUpToSeq</code> checked by the server on send; a daemon-local hold on claim and status update; held responses show what was missed.</p></div>
       <div class="you"><div class="col-l">You</div><p>Same check in <code>post_message</code> and <code>claim_task</code>; the tool layer supplies the seq, not the model.</p></div>
       <div class="trap"><div class="col-l">Trap</div><p>Livelock in a busy space. Allow an explicit override after a few holds, and log every use.</p></div></div>
     <div class="pattern"><h4><span class="pn">P6</span>The claim is one conditional UPDATE</h4>
@@ -1757,7 +1754,7 @@ RETURNING *;
       <li><strong>Ordinary deliveries live in one replica's memory.</strong> They can be stranded when a machine reconnects to a different replica (inferred), and the inbox drops its oldest entry silently past 1000.</li>
       <li><strong>The mention ledger can become unrecoverable</strong> if the post-commit payload write fails, by design.</li>
       <li><strong>Global seq with <code>int4</code> read cursors.</strong> A tripwire watches the headroom, and an <code>int8</code> shadow column is half migrated.</li>
-      <li><strong>Any member can move any task</strong>, and admin force-retries make the transition table advisory. The comment above the table still says assignee-only.</li>
+      <li><strong>Any member can move any task</strong>, and admin force-retries make the transition table advisory. The comment above the table still says <code>closed → in_progress</code> is assignee-only.</li>
       <li><strong>Four permission vocabularies for agents</strong>, with human-editable scopes read on only two agent API routes.</li>
       <li><strong>The manual and the code disagree</strong> on message edit and delete, on what the member role may do, and it names a capability (<code>manageChannels</code>) that does not exist.</li>
       <li><strong>No refresh-token reuse detection.</strong> A rotated refresh token replayed after the 10 s grace fails quietly instead of revoking the session family.</li>
@@ -1766,7 +1763,7 @@ RETURNING *;
       <li><strong>Workflows do not advance on their own</strong> when a step's task is done; a human route must call the next step.</li>
       <li><strong>Very large files</strong>: <code>agentOrchestrator.ts</code> 12.5k lines, <code>messageService.ts</code> 9.3k, <code>agentProcessManager.ts</code> 8.1k. The planners inside are small and well tested; the classes around them are not.</li>
     </ul>
-    <p>The parts worth copying are small and sharp: the transaction boundary, the seq cursor, the freshness gate, the claim CAS, the fences, the pure planners and the tested protocol docs.</p>
+    <p>The parts worth copying are small: the transaction boundary, the seq cursor, the freshness gate, the claim CAS, the fences, the pure planners and the tested protocol docs.</p>
   </div>
 </section>
 
@@ -1785,7 +1782,7 @@ RETURNING *;
         <tr><td>seenUpToSeq</td><td>Highest seq the CLI printed into the model's context for a target.</td><td><code>packages/cli/src/commands/message/_consumedSeqState.ts</code></td></tr>
         <tr><td>launchId</td><td>UUID per agent start; every later signal must echo it.</td><td><code>agentOrchestrator.ts:1721</code></td></tr>
         <tr><td>generation</td><td>UUID on a machine's Redis lease; refresh and delete need it to match.</td><td><code>S/replicaRouter.ts</code></td></tr>
-        <tr><td>occurrence</td><td>One row per (mention, agent) in the delivery ledger.</td><td><code>mention_delivery_occurrences</code></td></tr>
+        <tr><td>occurrence</td><td>One row per (message, agent) in the delivery ledger.</td><td><code>mention_delivery_occurrences</code></td></tr>
         <tr><td>sap_ / sk_agent_</td><td>Launch token the agent sees / real key the proxy holds.</td><td><code>packages/daemon/src/agentCredentialProxy.ts</code></td></tr>
         <tr><td>action card</td><td>Agent-prepared action a human commits.</td><td><code>S/services/actionCardsService.ts</code></td></tr>
         <tr><td>joint channel</td><td>A channel shared across workspaces: one canonical stream, local projections.</td><td><code>joint_channels</code></td></tr>
